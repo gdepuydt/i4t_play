@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define assert(x) \
+	if(!(x)) { MessageBoxA(0, #x, "Assertion Failure", MB_OK); __debugbreak();}
+
 enum {
 	P_MAX_KEYS = 256,
 	P_MAX_TEXT = 256,
@@ -80,7 +83,7 @@ struct P_Mouse {
 
 struct Play {
 	//Window
-	char *name;
+	const char *name;
 	P_Int2 pos;
 	P_Int2 size;
 
@@ -120,33 +123,115 @@ struct Play {
 
 	//State
 	P_Bool quit;
+
+	//Win32-specific stuff
+	HWND win32_window;
 };
 
-Play p;
-
-int16_t generate_sample() {
+int16_t p_generate_sample() {
+	// ...
 	return 0;
 }
 
-LRESULT CALLBACK Play_WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
 	return DefWindowProcW(window, message, wparam, lparam);
 }
 
-P_Bool play_initialize(Play *play) {
+static void p_pull_window_state(Play *p) {
+	RECT window_rectangle;
+	GetWindowRect(p->win32_window, &window_rectangle);
+
+	//This is the actual canvas of the rectange
+	RECT client_rectangle;
+	GetClientRect(p->win32_window, &client_rectangle);
+
+	p->pos.x = window_rectangle.left + client_rectangle.left;
+	p->pos.y = window_rectangle.top + client_rectangle.top;
+	p->size.x = client_rectangle.right - client_rectangle.left;
+	p->size.y = client_rectangle.bottom - client_rectangle.top;
+}
+
+P_Bool p_initialize(Play *p) {
 	
+	if (!p->name) {
+		p->name = "Play";
+	}
+	int window_x;
+	if (p->pos.x) {
+		window_x = p->pos.x;
+	}
+	else {
+		window_x = CW_USEDEFAULT;
+	}
+
+	int window_y;
+	if (p->pos.y) {
+		window_y = p->pos.y;
+	}
+	else {
+		window_y = CW_USEDEFAULT;
+	}
+
+	int window_width;
+	if (p->size.x) {
+		window_width = p->size.x;
+	}
+	else {
+		window_width = CW_USEDEFAULT;
+	}
+	int window_height;
+	if (p->size.y) {
+		window_height = p->size.y;
+	}
+	else {
+		window_height = CW_USEDEFAULT;
+	}
+
+	if (window_height != CW_USEDEFAULT && window_width != CW_USEDEFAULT) {
+		RECT window_rectangle;
+		window_rectangle.left = 0;
+		window_rectangle.right = window_width;
+		window_rectangle.top = 0;
+		window_rectangle.bottom = window_height;
+
+		//adjust the window rectangle so that the client rectangle will have the xpected size 
+		if (AdjustWindowRect(&window_rectangle, WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0)) {
+			window_width = window_rectangle.right - window_rectangle.left;
+			window_height = window_rectangle.bottom - window_rectangle.top;
+		}
+	}
+
+	//
+	//Window creation
+	//
+
 	WNDCLASSA window_class = { 0 };
-	window_class.lpfnWndProc = Play_WindowProc;
+	window_class.lpfnWndProc = p_window_proc;
 	window_class.lpszClassName = "play";
 	window_class.style = CS_HREDRAW | CS_VREDRAW;
 	
 	if (RegisterClassA(&window_class) == 0) {
-		p.error = "Failed to initialize window class.";
-		return 0;
+		p->error = "Failed to initialize window class.";
+		return P_FALSE;
 	}
-	return 1;
+
+	p->win32_window = CreateWindowA("play", p->name, WS_OVERLAPPEDWINDOW | WS_VISIBLE, window_x, window_y, window_width, window_height, 0, 0, 0, 0);
+	if (!p->win32_window) {
+		p->error = "Failed to create window";
+		return P_FALSE;
+	}
+
+	p_pull_window_state(p);
+	
+	return P_TRUE;
 }
 
+//zero initialize the Play struct
+Play p;
+
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-	
+	//p.size.x = 100;
+	//p.size.y = 200;
+	assert(p_initialize(&p));
 	return 0;
 }
