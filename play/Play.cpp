@@ -3,9 +3,12 @@
 #include <stdio.h>
 
 enum {
-	PLAY_MAX_KEYS = 256,
-	PLAY_MAX_TEXT = 256,
-	PLAY_MAX_SAMPLES = 256
+	P_MAX_KEYS = 256,
+	P_MAX_TEXT = 256,
+	P_MAX_ERROR = 1024,
+	P_MAX_SOUND_SAMPLES = 1024 * 1024,
+	P_TRUE = 1,
+	P_FALSE = 0,
 };
 
 typedef uint8_t P_Bool;
@@ -19,7 +22,6 @@ struct P_Float2 {
 	float x;
 	float y;
 };
-
 
 struct P_DigitalButton {
 	P_Bool down;
@@ -82,8 +84,12 @@ struct Play {
 	P_Int2 pos;
 	P_Int2 size;
 
+	//Error
+	const char *error; //0 if no error
+	char *error_buffer[P_MAX_ERROR];
+
 	//Keyboard
-	P_DigitalButton keys[PLAY_MAX_KEYS];
+	P_DigitalButton keys[P_MAX_KEYS];
 	
 	//Gamepad
 	P_Gamepad gamepad;
@@ -104,13 +110,13 @@ struct Play {
 	uint64_t time_milliseconds;
 
 	//Sound
-	uint32_t samples_per_second; //e.g. 44.4k
-	int16_t *samples; //points to beginning of sample_buffer after update
-	int16_t sample_buffer[PLAY_MAX_SAMPLES];
+	uint32_t sound_samples_per_second; //e.g. 44.4k
+	int16_t *sound_samples; //points to beginning of sample_buffer after update
+	int16_t sound_sample_buffer[P_MAX_SOUND_SAMPLES];
 
 	//Text
 	char *text; //0 if no new text, stored in utf8
-	char text_buffer[PLAY_MAX_TEXT];
+	char text_buffer[P_MAX_TEXT];
 
 	//State
 	P_Bool quit;
@@ -122,10 +128,25 @@ int16_t generate_sample() {
 	return 0;
 }
 
-void play_initialize(Play *play) {
-	return;
+LRESULT CALLBACK Play_WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+	return DefWindowProcW(window, message, wparam, lparam);
+}
+
+P_Bool play_initialize(Play *play) {
+	
+	WNDCLASSA window_class = { 0 };
+	window_class.lpfnWndProc = Play_WindowProc;
+	window_class.lpszClassName = "play";
+	window_class.style = CS_HREDRAW | CS_VREDRAW;
+	
+	if (RegisterClassA(&window_class) == 0) {
+		p.error = "Failed to initialize window class.";
+		return 0;
+	}
+	return 1;
 }
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+	
 	return 0;
 }
