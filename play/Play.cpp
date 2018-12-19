@@ -145,12 +145,19 @@ static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, 
 
 	LRESULT result = 0;
 	switch (message) {
+	case WM_DESTROY:
+		p->quit = P_TRUE;
+		break;
 	case WM_TIMER:
 		SwitchToFiber(p->win32.main_fiber);
 		break;
+	case WM_ENTERMENULOOP:
 	case WM_ENTERSIZEMOVE:
+		//Every millisecond a timer message is catched by the WM_TIMER message the program switched to the main fiber. 
+		//this way we don't end up in  a recursive loop of unresponsiveness.
 		SetTimer(window, 0, 1, 0);
 		break;
+	case WM_EXITMENULOOP:
 	case WM_EXITSIZEMOVE:
 		KillTimer(window, 0);
 		break;
@@ -186,6 +193,8 @@ static void p_pull_window_state(Play *p) {
 	p->size.x = client_rectangle.right - client_rectangle.left;
 	p->size.y = client_rectangle.bottom - client_rectangle.top;
 }
+
+
 
 P_Bool p_initialize(Play *p) {
 	
@@ -272,8 +281,8 @@ P_Bool p_initialize(Play *p) {
 
 
 void P_Pull(Play *p) {
-	p_pull_window_state(p);
 	SwitchToFiber(p->win32.message_fiber);
+	p_pull_window_state(p);
 }
 
 void P_Push(Play *p) {
@@ -289,6 +298,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	assert(p_initialize(&p));
 	while (!p.quit) {
 		P_Pull(&p);
+		char temp[1024];
+		static DWORD last_print_ticks = 0;
+		if (GetTickCount() - last_print_ticks > 250) {
+			sprintf_s(temp, sizeof(temp), "x=%d, y=%d, dx=%d, dy=%d\n", p.pos.x, p.pos.y, p.size.x, p.size.y);
+			OutputDebugStringA(temp);
+			last_print_ticks = GetTickCount();
+		}
 		P_Push(&p);
 	}
 
