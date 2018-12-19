@@ -83,8 +83,8 @@ struct P_Mouse {
 
 struct P_Win32 {
 	HWND window;
-	HANDLE main_fiber;
-	HANDLE message_fiber;
+	void *main_fiber;
+	void *message_fiber;
 };
 
 struct Play {
@@ -140,16 +140,37 @@ int16_t p_generate_sample() {
 }
 
 static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-	return DefWindowProcW(window, message, wparam, lparam);
+	//pull in the user data, so we can access (and switch to) the main app fiber after timeout processing messages    
+	Play *p = (Play *)GetWindowLongPtr(window, GWLP_USERDATA);
+
+	LRESULT result = 0;
+	switch (message) {
+	case WM_TIMER:
+		SwitchToFiber(p->win32.main_fiber);
+		break;
+	case WM_ENTERSIZEMOVE:
+		SetTimer(window, 0, 1, 0);
+		break;
+	case WM_EXITSIZEMOVE:
+		KillTimer(window, 0);
+		break;
+
+	default:
+		result = DefWindowProcW(window, message, wparam, lparam);
+	}
+	return result;
 }
 
-static void p_message_fiber_proc(Play *p) {
-	MSG message;
-	if (PeekMessageA(&message, 0, 0, 0, PM_REMOVE)) {
-		TranslateMessage(&message);
-		DispatchMessageA(&message);
+//message handling happens in its own loop
+static void CALLBACK p_message_fiber_proc(Play *p) {
+	for (;;) {
+		MSG message;
+		if (PeekMessageA(&message, 0, 0, 0, PM_REMOVE)) {
+			TranslateMessage(&message);
+			DispatchMessageA(&message);
+		}
+		SwitchToFiber(p->win32.main_fiber);
 	}
-
 }
 
 static void p_pull_window_state(Play *p) {
@@ -203,7 +224,9 @@ P_Bool p_initialize(Play *p) {
 	}
 
 	p->win32.main_fiber = ConvertThreadToFiber(0);
+	assert(p->win32.main_fiber);
 	p->win32.message_fiber = CreateFiber(0, (LPFIBER_START_ROUTINE)p_message_fiber_proc, p);
+	assert(p->win32.message_fiber);
 
 	if (window_height != CW_USEDEFAULT && window_width != CW_USEDEFAULT) {
 		RECT window_rectangle;
@@ -239,6 +262,9 @@ P_Bool p_initialize(Play *p) {
 		return P_FALSE;
 	}
 
+	//enable acces to user data in the wnd_proc function
+	SetWindowLongPtr(p->win32.window, GWLP_USERDATA, (LONG_PTR)p);
+
 	p_pull_window_state(p);
 	
 	return P_TRUE;
@@ -247,7 +273,7 @@ P_Bool p_initialize(Play *p) {
 
 void P_Pull(Play *p) {
 	p_pull_window_state(p);
-	
+	SwitchToFiber(p->win32.message_fiber);
 }
 
 void P_Push(Play *p) {
