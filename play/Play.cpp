@@ -81,6 +81,12 @@ struct P_Mouse {
 	int wheel_delta;
 };
 
+struct P_Win32 {
+	HWND window;
+	HANDLE main_fiber;
+	HANDLE message_fiber;
+};
+
 struct Play {
 	//Window
 	const char *name;
@@ -125,7 +131,7 @@ struct Play {
 	P_Bool quit;
 
 	//Win32-specific stuff
-	HWND win32_window;
+	P_Win32 win32;
 };
 
 int16_t p_generate_sample() {
@@ -137,13 +143,22 @@ static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, 
 	return DefWindowProcW(window, message, wparam, lparam);
 }
 
+static void p_message_fiber_proc(Play *p) {
+	MSG message;
+	if (PeekMessageA(&message, 0, 0, 0, PM_REMOVE)) {
+		TranslateMessage(&message);
+		DispatchMessageA(&message);
+	}
+
+}
+
 static void p_pull_window_state(Play *p) {
 	RECT window_rectangle;
-	GetWindowRect(p->win32_window, &window_rectangle);
+	GetWindowRect(p->win32.window, &window_rectangle);
 
 	//This is the actual canvas of the rectange
 	RECT client_rectangle;
-	GetClientRect(p->win32_window, &client_rectangle);
+	GetClientRect(p->win32.window, &client_rectangle);
 
 	p->pos.x = window_rectangle.left + client_rectangle.left;
 	p->pos.y = window_rectangle.top + client_rectangle.top;
@@ -187,6 +202,9 @@ P_Bool p_initialize(Play *p) {
 		window_height = CW_USEDEFAULT;
 	}
 
+	p->win32.main_fiber = ConvertThreadToFiber(0);
+	p->win32.message_fiber = CreateFiber(0, (LPFIBER_START_ROUTINE)p_message_fiber_proc, p);
+
 	if (window_height != CW_USEDEFAULT && window_width != CW_USEDEFAULT) {
 		RECT window_rectangle;
 		window_rectangle.left = 0;
@@ -215,8 +233,8 @@ P_Bool p_initialize(Play *p) {
 		return P_FALSE;
 	}
 
-	p->win32_window = CreateWindowA("play", p->name, WS_OVERLAPPEDWINDOW | WS_VISIBLE, window_x, window_y, window_width, window_height, 0, 0, 0, 0);
-	if (!p->win32_window) {
+	p->win32.window = CreateWindowA("play", p->name, WS_OVERLAPPEDWINDOW | WS_VISIBLE, window_x, window_y, window_width, window_height, 0, 0, 0, 0);
+	if (!p->win32.window) {
 		p->error = "Failed to create window";
 		return P_FALSE;
 	}
@@ -226,12 +244,27 @@ P_Bool p_initialize(Play *p) {
 	return P_TRUE;
 }
 
-//zero initialize the Play struct
+
+void P_Pull(Play *p) {
+	p_pull_window_state(p);
+	
+}
+
+void P_Push(Play *p) {
+
+}
+
+//Example code: zero initialize the Play struct
 Play p;
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//p.size.x = 100;
 	//p.size.y = 200;
 	assert(p_initialize(&p));
+	while (!p.quit) {
+		P_Pull(&p);
+		P_Push(&p);
+	}
+
 	return 0;
 }
