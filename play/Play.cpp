@@ -107,16 +107,23 @@ struct Play {
 	P_Mouse mouse;
 	
 	//Time
+	
 	float delta_seconds;
+	uint64_t delta_ticks;
 	uint64_t delta_nano_seconds;
 	uint64_t delta_micro_seconds;
 	uint64_t delta_milli_seconds;
 	uint64_t delta_samples; //how many audio samples we need to calculate this frame
 
 	double time_seconds; //53 bits of integer precision
+	uint64_t time_ticks;
 	uint64_t time_nanoseconds;
 	uint64_t time_microseconds;
 	uint64_t time_milliseconds;
+
+	uint64_t initial_ticks;
+	uint64_t ticks_per_second;
+	
 
 	//Sound
 	uint32_t sound_samples_per_second; //e.g. 44.4k
@@ -180,7 +187,7 @@ static void CALLBACK p_message_fiber_proc(Play *p) {
 	}
 }
 
-static void p_pull_window_state(Play *p) {
+static void p_pull_window(Play *p) {
 	RECT window_rectangle;
 	GetWindowRect(p->win32.window, &window_rectangle);
 
@@ -194,7 +201,25 @@ static void p_pull_window_state(Play *p) {
 	p->size.y = client_rectangle.bottom - client_rectangle.top;
 }
 
+static void p_pull_time(Play *p) {
+	LARGE_INTEGER large_integer;
+	QueryPerformanceCounter(&large_integer);
+	uint64_t current_ticks = large_integer.QuadPart;
+	p->delta_ticks = current_ticks - p->time_ticks;
+	p->time_ticks = current_ticks;
 
+	p->delta_nano_seconds = 1000 * 1000 * 1000 * (p->delta_ticks / p->ticks_per_second);
+	p->delta_micro_seconds = p->delta_nano_seconds / 1000;
+	p->delta_milli_seconds = p->delta_micro_seconds / 1000;
+	p->delta_seconds = (float)p->delta_ticks / (float)p->ticks_per_second;
+
+}
+
+void p_pull(Play *p) {
+	SwitchToFiber(p->win32.message_fiber);
+	p_pull_window(p);
+	p_pull_time(p);
+}
 
 P_Bool p_initialize(Play *p) {
 	
@@ -274,18 +299,18 @@ P_Bool p_initialize(Play *p) {
 	//enable acces to user data in the wnd_proc function
 	SetWindowLongPtr(p->win32.window, GWLP_USERDATA, (LONG_PTR)p);
 
-	p_pull_window_state(p);
-	
+	LARGE_INTEGER large_integer;
+	QueryPerformanceFrequency(&large_integer);
+	p->ticks_per_second = large_integer.QuadPart;
+	QueryPerformanceCounter(&large_integer);
+	p->initial_ticks = large_integer.QuadPart;
+
+	p_pull(p);
+
 	return P_TRUE;
 }
 
-
-void P_Pull(Play *p) {
-	SwitchToFiber(p->win32.message_fiber);
-	p_pull_window_state(p);
-}
-
-void P_Push(Play *p) {
+void p_push(Play *p) {
 
 }
 
@@ -297,15 +322,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//p.size.y = 200;
 	assert(p_initialize(&p));
 	while (!p.quit) {
-		P_Pull(&p);
+		p_pull(&p);
 		char temp[1024];
 		static DWORD last_print_ticks = 0;
 		if (GetTickCount() - last_print_ticks > 250) {
-			sprintf_s(temp, sizeof(temp), "x=%d, y=%d, dx=%d, dy=%d\n", p.pos.x, p.pos.y, p.size.x, p.size.y);
+			sprintf_s(temp, sizeof(temp), "x=%d, y=%d, dx=%d, dy=%d\ndelta_ticks=%llu, time_ticks=%llu\n", p.pos.x, p.pos.y, p.size.x, p.size.y, p.delta_ticks, p.time_ticks);
 			OutputDebugStringA(temp);
 			last_print_ticks = GetTickCount();
 		}
-		P_Push(&p);
+		p_push(&p);
 	}
 
 	return 0;
