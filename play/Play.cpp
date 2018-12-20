@@ -1,9 +1,20 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdarg.h>
+
 
 #define assert(x) \
 	if(!(x)) { MessageBoxA(0, #x, "Assertion Failure", MB_OK); __debugbreak();}
+
+void debug_out(const char *format, ...) {
+	static char buffer[1024];
+	va_list arg_list;
+	va_start(arg_list, format);
+	vsprintf_s(buffer, sizeof(buffer), format, arg_list);
+	va_end(arg_list);
+	OutputDebugStringA(buffer);
+}
 
 enum {
 	P_MAX_KEYS = 256,
@@ -12,6 +23,9 @@ enum {
 	P_MAX_SOUND_SAMPLES = 1024 * 1024,
 	P_TRUE = 1,
 	P_FALSE = 0,
+	P_CTRL = VK_CONTROL,
+	P_ALT = VK_MENU,
+	P_SHIFT = VK_SHIFT,
 };
 
 typedef uint8_t P_Bool;
@@ -78,7 +92,7 @@ struct P_Mouse {
 	P_Int2 position; //window relative
 	P_Int2 screen_position; //
 	int wheel;
-	int wheel_delta;
+	int delta_wheel;
 };
 
 struct P_Win32 {
@@ -98,7 +112,7 @@ struct Play {
 	char *error_buffer[P_MAX_ERROR];
 
 	//Keyboard
-	P_DigitalButton keys[P_MAX_KEYS];
+	P_DigitalButton keys[P_MAX_KEYS]; //indexed by scancodes
 	
 	//Gamepad
 	P_Gamepad gamepad;
@@ -110,16 +124,16 @@ struct Play {
 	
 	float delta_seconds;
 	uint64_t delta_ticks;
-	uint64_t delta_nano_seconds;
-	uint64_t delta_micro_seconds;
-	uint64_t delta_milli_seconds;
+	uint64_t delta_nanoseconds;
+	uint64_t delta_microseconds;
+	uint64_t delta_milliseconds;
 	uint64_t delta_samples; //how many audio samples we need to calculate this frame
 
-	double time_seconds; //53 bits of integer precision
-	uint64_t time_ticks;
-	uint64_t time_nanoseconds;
-	uint64_t time_microseconds;
-	uint64_t time_milliseconds;
+	double seconds; //53 bits of integer precision
+	uint64_t ticks;
+	uint64_t nanoseconds;
+	uint64_t microseconds;
+	uint64_t milliseconds;
 
 	uint64_t initial_ticks;
 	uint64_t ticks_per_second;
@@ -132,9 +146,11 @@ struct Play {
 
 	//Text
 	char *text; //0 if no new text, stored in utf8
+	char *text_end;
 	char text_buffer[P_MAX_TEXT];
 
 	//State
+	P_Bool initialized;
 	P_Bool quit;
 
 	//Win32-specific stuff
@@ -146,12 +162,27 @@ int16_t p_generate_sample() {
 	return 0;
 }
 
+/*
+// Window Procedure
+*/
+
 static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
 	//pull in the user data, so we can access (and switch to) the main app fiber after timeout processing messages    
 	Play *p = (Play *)GetWindowLongPtr(window, GWLP_USERDATA);
 
 	LRESULT result = 0;
 	switch (message) {
+	case WM_CHAR: {
+		WCHAR utf16_character = (WCHAR)wparam;
+		char ascii_character[4];
+		uint32_t ascii_length = WideCharToMultiByte(CP_ACP, 0, &utf16_character, 1, ascii_character, 4, 0, 0);
+		if (ascii_length != 0 && p->text_end + ascii_length < p->text_buffer + sizeof(p->text_buffer) - 1) {
+			CopyMemory(p->text_end, ascii_character, ascii_length);
+			p->text_end[ascii_length] = 0;
+			p->text_end += ascii_length;
+		}
+		break;
+	}
 	case WM_DESTROY:
 		p->quit = P_TRUE;
 		break;
@@ -187,7 +218,21 @@ static void CALLBACK p_message_fiber_proc(Play *p) {
 	}
 }
 
-static void p_pull_window(Play *p) {
+//error
+
+static void p_exit_with_error(Play *p) {
+	MessageBoxA(0, p->error, "Play Error", MB_OK);
+	ExitProcess(0);
+}
+
+
+/*
+	PULL
+*/
+
+
+
+void p_pull_window(Play *p) {
 	RECT window_rectangle;
 	GetWindowRect(p->win32.window, &window_rectangle);
 
@@ -201,24 +246,73 @@ static void p_pull_window(Play *p) {
 	p->size.y = client_rectangle.bottom - client_rectangle.top;
 }
 
-static void p_pull_time(Play *p) {
+void p_pull_time(Play *p) {
 	LARGE_INTEGER large_integer;
 	QueryPerformanceCounter(&large_integer);
 	uint64_t current_ticks = large_integer.QuadPart;
-	p->delta_ticks = current_ticks - p->time_ticks;
-	p->time_ticks = current_ticks;
+	p->delta_ticks = current_ticks - p->ticks - p->initial_ticks;
+	p->ticks = current_ticks - p->initial_ticks;
 
-	p->delta_nano_seconds = 1000 * 1000 * 1000 * (p->delta_ticks / p->ticks_per_second);
-	p->delta_micro_seconds = p->delta_nano_seconds / 1000;
-	p->delta_milli_seconds = p->delta_micro_seconds / 1000;
+	p->delta_nanoseconds = 1000 * 1000 * 1000 * (p->delta_ticks / p->ticks_per_second);
+	p->delta_microseconds = p->delta_nanoseconds / 1000;
+	p->delta_milliseconds = p->delta_microseconds / 1000;
 	p->delta_seconds = (float)p->delta_ticks / (float)p->ticks_per_second;
+	//TODO: fill in delta_samples once we get to the sound processing
+
+	p->nanoseconds = 1000 * 1000 * 1000 * (p->ticks / p->ticks_per_second);
+	p->microseconds = p->nanoseconds / 1000;
+	p->milliseconds = p->microseconds / 1000;
+	p->seconds = (double)p->ticks / (double)p->ticks_per_second;
 
 }
 
+void p_pull_digital_button(P_DigitalButton *button, P_Bool down) {
+	P_Bool was_down = button->down; //Is the button currently pressed down.
+	button->released = was_down && !down; 
+	button->pressed = !was_down && down;
+	button->down = down;
+}
+
+void p_pull_keys(Play *p) {
+	BYTE keyboard_state[256];
+	if (!GetKeyboardState(keyboard_state)) {
+		return;
+	}
+	for (int key = 0; key < 256; key++) {
+		p_pull_digital_button(p->keys + key, keyboard_state[key] >> 7);
+	}
+}
+
+
+//pull, push, update
+
 void p_pull(Play *p) {
+	if (!p->initialized) {
+		if (!p->error) {
+			p->error = "Play was not initialized.";
+		}
+		p_exit_with_error(p);
+		return;
+	}
+	p->text_end = p->text_buffer;
+	p->text = 0;
+	
 	SwitchToFiber(p->win32.message_fiber);
 	p_pull_window(p);
 	p_pull_time(p);
+	p_pull_keys(p);
+	if (p->text_end != p->text_buffer) {
+		p->text = p->text_buffer;
+	}
+}
+
+void p_push(Play *p) {
+	// ...
+}
+
+void p_update(Play *p) {
+	p_push(p);
+	p_pull(p);
 }
 
 P_Bool p_initialize(Play *p) {
@@ -305,13 +399,10 @@ P_Bool p_initialize(Play *p) {
 	QueryPerformanceCounter(&large_integer);
 	p->initial_ticks = large_integer.QuadPart;
 
+	p->initialized = P_TRUE;
 	p_pull(p);
 
 	return P_TRUE;
-}
-
-void p_push(Play *p) {
-
 }
 
 //Example code: zero initialize the Play struct
@@ -320,17 +411,39 @@ Play p;
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//p.size.x = 100;
 	//p.size.y = 200;
-	assert(p_initialize(&p));
+	p_initialize(&p);
 	while (!p.quit) {
-		p_pull(&p);
-		char temp[1024];
-		static DWORD last_print_ticks = 0;
-		if (GetTickCount() - last_print_ticks > 250) {
-			sprintf_s(temp, sizeof(temp), "x=%d, y=%d, dx=%d, dy=%d\ndelta_ticks=%llu, time_ticks=%llu\n", p.pos.x, p.pos.y, p.size.x, p.size.y, p.delta_ticks, p.time_ticks);
-			OutputDebugStringA(temp);
-			last_print_ticks = GetTickCount();
+#if 0
+		static double last_print_time = 0.0;
+		if ((p.seconds - last_print_time) > 0.75) {
+			debug_out("x=%d, y=%d, dx=%d, dy=%d\n", p.pos.x, p.pos.y, p.size.x, p.size.y);
+			debug_out("delta_ticks = %llu, time_ticks = %llu\n", p.delta_ticks, p.ticks);
+			//debug_out("\n", );
+			last_print_time = p.seconds;
 		}
-		p_push(&p);
+#endif
+		if (p.text) {
+			debug_out("%s\n", p.text);
+		}
+		if (p.keys[P_CTRL].pressed) {
+			debug_out("Ctrl is pressed.\n");
+		}
+		if (p.keys[P_CTRL].released) {
+			debug_out("Ctrl is released.\n");
+		}
+		if (p.keys[P_ALT].pressed) {
+			debug_out("Alt is pressed.\n");
+		}
+		if (p.keys[P_ALT].released) {
+			debug_out("Alt is released.\n");
+		}
+		if (p.keys[P_SHIFT].pressed) {
+			debug_out("Shift is pressed.\n");
+		}
+		if (p.keys[P_SHIFT].released) {
+			debug_out("Shift is released.\n");
+		}
+		p_update(&p);
 	}
 
 	return 0;
