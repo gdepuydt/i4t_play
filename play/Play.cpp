@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <malloc.h>
 
 
 #define assert(x) \
@@ -89,7 +90,7 @@ struct P_Mouse {
 	P_DigitalButton left_button;
 	P_DigitalButton right_button;
 	P_Int2 delta_position;
-	P_Int2 position; //window relative
+	P_Int2 position; //client window relative
 	P_Int2 screen_position; //
 	int wheel;
 	int delta_wheel;
@@ -121,7 +122,6 @@ struct Play {
 	P_Mouse mouse;
 	
 	//Time
-	
 	float delta_seconds;
 	uint64_t delta_ticks;
 	uint64_t delta_nanoseconds;
@@ -162,49 +162,6 @@ int16_t p_generate_sample() {
 	return 0;
 }
 
-/*
-// Window Procedure
-*/
-
-static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-	//pull in the user data, so we can access (and switch to) the main app fiber after timeout processing messages    
-	Play *p = (Play *)GetWindowLongPtr(window, GWLP_USERDATA);
-
-	LRESULT result = 0;
-	switch (message) {
-	case WM_CHAR: {
-		WCHAR utf16_character = (WCHAR)wparam;
-		char ascii_character[4];
-		uint32_t ascii_length = WideCharToMultiByte(CP_ACP, 0, &utf16_character, 1, ascii_character, 4, 0, 0);
-		if (ascii_length != 0 && p->text_end + ascii_length < p->text_buffer + sizeof(p->text_buffer) - 1) {
-			CopyMemory(p->text_end, ascii_character, ascii_length);
-			p->text_end[ascii_length] = 0;
-			p->text_end += ascii_length;
-		}
-		break;
-	}
-	case WM_DESTROY:
-		p->quit = P_TRUE;
-		break;
-	case WM_TIMER:
-		SwitchToFiber(p->win32.main_fiber);
-		break;
-	case WM_ENTERMENULOOP:
-	case WM_ENTERSIZEMOVE:
-		//Every millisecond a timer message is catched by the WM_TIMER message the program switched to the main fiber. 
-		//this way we don't end up in  a recursive loop of unresponsiveness.
-		SetTimer(window, 0, 1, 0);
-		break;
-	case WM_EXITMENULOOP:
-	case WM_EXITSIZEMOVE:
-		KillTimer(window, 0);
-		break;
-
-	default:
-		result = DefWindowProcW(window, message, wparam, lparam);
-	}
-	return result;
-}
 
 //message handling happens in its own loop
 static void CALLBACK p_message_fiber_proc(Play *p) {
@@ -266,6 +223,13 @@ void p_pull_time(Play *p) {
 
 }
 
+
+
+void p_reset_digital_button(P_DigitalButton *button) {
+	button->pressed = P_FALSE;
+	button->released = P_FALSE;
+}
+
 void p_pull_digital_button(P_DigitalButton *button, P_Bool down) {
 	P_Bool was_down = button->down; //Is the button currently pressed down.
 	button->released = was_down && !down; 
@@ -296,10 +260,18 @@ void p_pull(Play *p) {
 	}
 	p->text_end = p->text_buffer;
 	p->text = 0;
+	p->mouse.delta_position.x = 0;
+	p->mouse.delta_position.y = 0;
 	
+	//Making sure the edge cased are always reset for each frame, otherwise the edge case will be triggered erroneously witheach frame after a edge case transition
+	p_reset_digital_button(&p->mouse.left_button);
+	p_reset_digital_button(&p->mouse.right_button);
+
 	SwitchToFiber(p->win32.message_fiber);
 	p_pull_window(p);
 	p_pull_time(p);
+	
+	
 	p_pull_keys(p);
 	if (p->text_end != p->text_buffer) {
 		p->text = p->text_buffer;
@@ -313,6 +285,84 @@ void p_push(Play *p) {
 void p_update(Play *p) {
 	p_push(p);
 	p_pull(p);
+}
+
+/*
+// Window Procedure
+*/
+
+static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+	//pull in the user data, so we can access (and switch to) the main app fiber after timeout processing messages    
+	Play *p = (Play *)GetWindowLongPtr(window, GWLP_USERDATA);
+
+	LRESULT result = 0;
+	switch (message) {
+	case WM_INPUT: {
+		UINT size;
+		GetRawInputData((HRAWINPUT)lparam, RID_INPUT, 0, &size, sizeof(RAWINPUTHEADER));
+		void *buffer = _alloca(size);
+		if (GetRawInputData((HRAWINPUT)lparam, RID_INPUT, buffer, &size, sizeof(RAWINPUTHEADER)) == size) {
+			RAWINPUT *raw_input = (RAWINPUT *)buffer;
+			if (raw_input->header.dwType == RIM_TYPEMOUSE && raw_input->data.mouse.usFlags == MOUSE_MOVE_RELATIVE) {
+				//debug_out("x=%d y=%d\n", raw_input->data.mouse.lLastX, raw_input->data.mouse.lLastY);
+				p->mouse.delta_position.x += raw_input->data.mouse.lLastX; //delta accross the frame, therefore we have to add the 'sub'-deltas
+				p->mouse.delta_position.y += raw_input->data.mouse.lLastY;
+
+				USHORT button_flags = raw_input->data.mouse.usButtonFlags;
+				P_Bool left_button_down = p->mouse.left_button.down;
+				if (button_flags & RI_MOUSE_LEFT_BUTTON_DOWN) {
+					left_button_down = P_TRUE;
+				}
+				if (button_flags & RI_MOUSE_LEFT_BUTTON_UP) {
+					left_button_down = P_FALSE;
+				}
+				p_pull_digital_button(&p->mouse.left_button, left_button_down);
+
+				P_Bool right_button_down = p->mouse.right_button.down;
+				if (button_flags & RI_MOUSE_RIGHT_BUTTON_DOWN) {
+					right_button_down = P_TRUE;
+				}
+				if (button_flags & RI_MOUSE_RIGHT_BUTTON_UP) {
+					right_button_down = P_FALSE;
+				}
+				p_pull_digital_button(&p->mouse.right_button, right_button_down);
+			}
+		}
+		result = DefWindowProcA(window, message, wparam, lparam);
+		break;
+	}
+	case WM_CHAR: {
+		WCHAR utf16_character = (WCHAR)wparam;
+		char ascii_character;
+		uint32_t ascii_length = WideCharToMultiByte(CP_ACP, 0, &utf16_character, 1, &ascii_character, 1, 0, 0);
+		if (ascii_length == 1 && p->text_end + 1 < p->text_buffer + sizeof(p->text_buffer) - 1) {
+			*p->text_end = ascii_character;
+			p->text_end[1] = 0;
+			p->text_end += ascii_length;
+		}
+		break;
+	}
+	case WM_DESTROY:
+		p->quit = P_TRUE;
+		break;
+	case WM_TIMER:
+		SwitchToFiber(p->win32.main_fiber);
+		break;
+	case WM_ENTERMENULOOP:
+	case WM_ENTERSIZEMOVE:
+		//Every millisecond a timer message is catched by the WM_TIMER message the program switched to the main fiber. 
+		//this way we don't end up in  a recursive loop of unresponsiveness.
+		SetTimer(window, 0, 1, 0);
+		break;
+	case WM_EXITMENULOOP:
+	case WM_EXITSIZEMOVE:
+		KillTimer(window, 0);
+		break;
+
+	default:
+		result = DefWindowProcW(window, message, wparam, lparam);
+	}
+	return result;
 }
 
 P_Bool p_initialize(Play *p) {
@@ -399,6 +449,18 @@ P_Bool p_initialize(Play *p) {
 	QueryPerformanceCounter(&large_integer);
 	p->initial_ticks = large_integer.QuadPart;
 
+	//USB mouse
+	RAWINPUTDEVICE raw_input_device = {0};
+	raw_input_device.usUsagePage = 0x01;
+	raw_input_device.usUsage = 0x02;
+	raw_input_device.dwFlags = 0;
+	raw_input_device.hwndTarget = p->win32.window;
+	if (!RegisterRawInputDevices(&raw_input_device, 1, sizeof(raw_input_device))) {
+		p->error = "Failed to register input device: USB mouse.";
+		return P_FALSE;
+	}
+
+
 	p->initialized = P_TRUE;
 	p_pull(p);
 
@@ -422,6 +484,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			last_print_time = p.seconds;
 		}
 #endif
+		if (p.mouse.left_button.pressed) {
+			debug_out("left mouse button pressed\n");
+		}
+		if (p.mouse.left_button.released) {
+			debug_out("left mouse button released\n");
+		}
+		if (p.mouse.right_button.pressed) {
+			debug_out("right mouse button pressed\n");
+		}
+		if (p.mouse.right_button.released) {
+			debug_out("right mouse button released\n");
+		}
+		
 		if (p.text) {
 			debug_out("%s\n", p.text);
 		}
