@@ -258,16 +258,27 @@ void p_pull(Play *p) {
 		p_exit_with_error(p);
 		return;
 	}
+	
+	//required pre-processing before entering the message loop
 	p->text_end = p->text_buffer;
 	p->text = 0;
 	p->mouse.delta_position.x = 0;
 	p->mouse.delta_position.y = 0;
+	p->mouse.delta_wheel = 0;
 	
 	//Making sure the edge cased are always reset for each frame, otherwise the edge case will be triggered erroneously witheach frame after a edge case transition
 	p_reset_digital_button(&p->mouse.left_button);
 	p_reset_digital_button(&p->mouse.right_button);
 
+
+	//Handle the window messages
 	SwitchToFiber(p->win32.message_fiber);
+	
+	//required post-processing after exiting the message loop.
+	p->mouse.wheel += p->mouse.delta_wheel;
+	p->mouse.position.x += p->mouse.delta_position.x;
+	p->mouse.position.y += p->mouse.delta_position.y;
+
 	p_pull_window(p);
 	p_pull_time(p);
 	
@@ -326,6 +337,10 @@ static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, 
 					right_button_down = P_FALSE;
 				}
 				p_pull_digital_button(&p->mouse.right_button, right_button_down);
+				if (button_flags & RI_MOUSE_WHEEL) {
+					p->mouse.delta_wheel += ((SHORT)raw_input->data.mouse.usButtonData) /WHEEL_DELTA;
+				}
+			
 			}
 		}
 		result = DefWindowProcA(window, message, wparam, lparam);
@@ -484,6 +499,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			last_print_time = p.seconds;
 		}
 #endif
+		if (p.mouse.delta_wheel) {
+			debug_out("wheel delta: %d wheel: %d\n", p.mouse.delta_wheel, p.mouse.wheel);
+		}
+		
 		if (p.mouse.left_button.pressed) {
 			debug_out("left mouse button pressed\n");
 		}
