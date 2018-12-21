@@ -190,17 +190,17 @@ static void p_exit_with_error(Play *p) {
 
 
 void p_pull_window(Play *p) {
-	RECT window_rectangle;
-	GetWindowRect(p->win32.window, &window_rectangle);
-
 	//This is the actual canvas of the rectange
 	RECT client_rectangle;
 	GetClientRect(p->win32.window, &client_rectangle);
-
-	p->pos.x = window_rectangle.left + client_rectangle.left;
-	p->pos.y = window_rectangle.top + client_rectangle.top;
 	p->size.x = client_rectangle.right - client_rectangle.left;
 	p->size.y = client_rectangle.bottom - client_rectangle.top;
+	
+	POINT window_position = { client_rectangle.left, client_rectangle.top };
+	ClientToScreen(p->win32.window, &window_position);
+
+	p->pos.x = window_position.x;
+	p->pos.y = window_position.y;
 }
 
 void p_pull_time(Play *p) {
@@ -247,6 +247,16 @@ void p_pull_keys(Play *p) {
 	}
 }
 
+void p_pull_mouse(Play *p) {
+	POINT mouse_position;
+	GetCursorPos(&mouse_position);
+	mouse_position.x -= p->pos.x;
+	mouse_position.y -= p->pos.y;
+
+	p->mouse.position.x = mouse_position.x;
+	p->mouse.position.y = mouse_position.y;
+}
+
 
 //pull, push, update
 
@@ -278,15 +288,14 @@ void p_pull(Play *p) {
 	p->mouse.wheel += p->mouse.delta_wheel;
 	p->mouse.position.x += p->mouse.delta_position.x;
 	p->mouse.position.y += p->mouse.delta_position.y;
-
-	p_pull_window(p);
-	p_pull_time(p);
-	
-	
 	p_pull_keys(p);
 	if (p->text_end != p->text_buffer) {
 		p->text = p->text_buffer;
 	}
+	p_pull_window(p);
+	p_pull_time(p);
+	p_pull_mouse(p);
+
 }
 
 void p_push(Play *p) {
@@ -504,7 +513,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 		}
 		
 		if (p.mouse.left_button.pressed) {
-			debug_out("left mouse button pressed\n");
+			debug_out("left mouse button pressed: %d, %d\n", p.mouse.position.x, p.mouse.position.y);
 		}
 		if (p.mouse.left_button.released) {
 			debug_out("left mouse button released\n");
