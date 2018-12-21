@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <malloc.h>
+#include <xinput.h>
+#include <math.h>
 
 
 #define assert(x) \
@@ -48,16 +50,15 @@ struct P_DigitalButton {
 };
 
 struct P_AnalogButton {
-	
 	float threshold; //defaults to 0.5
 	float value; //0.0 to 1.0
 	P_Bool down; //value <= threshold
 	P_Bool pressed; // !down -> down
 	P_Bool released; //down -> !down
-
 };
 
 struct P_Axis {
+	
 	float value;  //-1.0 to 1.0
 	float threshold; //deadzone threshold, (abs)value <= threshold gets clamped to 0
 };
@@ -68,22 +69,25 @@ struct P_Stick {
 };
 
 struct P_Gamepad {
+	P_Bool connected;
 	P_DigitalButton a_button;
 	P_DigitalButton b_button;
 	P_DigitalButton x_button;
 	P_DigitalButton y_button;
-	P_DigitalButton left_bumper_button;
-	P_DigitalButton right_bumper_button;
+	P_DigitalButton left_shoulder_button;
+	P_DigitalButton right_shoulder_button;
 	P_DigitalButton up_button;
 	P_DigitalButton down_button;
+	P_DigitalButton left_button;
+	P_DigitalButton right_button;
 	P_AnalogButton left_trigger;
 	P_AnalogButton right_trigger;
 	P_Stick left_thumb_stick;
 	P_Stick right_thumb_stick;
 	P_DigitalButton left_thumb_button;
 	P_DigitalButton right_thumb_button;
-	P_DigitalButton select_button;
-	P_DigitalButton play_button;
+	P_DigitalButton back_button;
+	P_DigitalButton start_button;
 };
 
 struct P_Mouse {
@@ -91,22 +95,28 @@ struct P_Mouse {
 	P_DigitalButton right_button;
 	P_Int2 delta_position;
 	P_Int2 position; //client window relative
-	P_Int2 screen_position; //
 	int wheel;
 	int delta_wheel;
 };
+
+typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD dwUserIndex, XINPUT_STATE* pState);
 
 struct P_Win32 {
 	HWND window;
 	void *main_fiber;
 	void *message_fiber;
+	XINPUTGETSTATE xinput_get_state;
+};
+
+struct P_Window {
+	const char *title;
+	P_Int2 pos;
+	P_Int2 size;
 };
 
 struct Play {
 	//Window
-	const char *name;
-	P_Int2 pos;
-	P_Int2 size;
+	P_Window window;
 
 	//Error
 	const char *error; //0 if no error
@@ -193,14 +203,14 @@ void p_pull_window(Play *p) {
 	//This is the actual canvas of the rectange
 	RECT client_rectangle;
 	GetClientRect(p->win32.window, &client_rectangle);
-	p->size.x = client_rectangle.right - client_rectangle.left;
-	p->size.y = client_rectangle.bottom - client_rectangle.top;
+	p->window.size.x = client_rectangle.right - client_rectangle.left;
+	p->window.size.y = client_rectangle.bottom - client_rectangle.top;
 	
 	POINT window_position = { client_rectangle.left, client_rectangle.top };
 	ClientToScreen(p->win32.window, &window_position);
 
-	p->pos.x = window_position.x;
-	p->pos.y = window_position.y;
+	p->window.pos.x = window_position.x;
+	p->window.pos.y = window_position.y;
 }
 
 void p_pull_time(Play *p) {
@@ -223,8 +233,6 @@ void p_pull_time(Play *p) {
 
 }
 
-
-
 void p_reset_digital_button(P_DigitalButton *button) {
 	button->pressed = P_FALSE;
 	button->released = P_FALSE;
@@ -235,6 +243,21 @@ void p_pull_digital_button(P_DigitalButton *button, P_Bool down) {
 	button->released = was_down && !down; 
 	button->pressed = !was_down && down;
 	button->down = down;
+}
+
+void p_pull_analog_button(P_AnalogButton *button, float value) {
+	button->value = value;
+	P_Bool was_down = button->down;
+	button->down = (value >= button->threshold);
+	button->pressed = !was_down && button->down;
+	button->released = was_down && !button->down;
+}
+
+void p_pull_axis(P_Axis *axis, float value) {
+	if (fabs(value) <= axis->threshold) {
+		axis->value = 0.0;
+	}
+	axis->value = value;
 }
 
 void p_pull_keys(Play *p) {
@@ -250,12 +273,50 @@ void p_pull_keys(Play *p) {
 void p_pull_mouse(Play *p) {
 	POINT mouse_position;
 	GetCursorPos(&mouse_position);
-	mouse_position.x -= p->pos.x;
-	mouse_position.y -= p->pos.y;
+	mouse_position.x -= p->window.pos.x;
+	mouse_position.y -= p->window.pos.y;
 
 	p->mouse.position.x = mouse_position.x;
 	p->mouse.position.y = mouse_position.y;
 }
+
+void p_pull_gamepad(Play *p) {
+	if (!p->win32.xinput_get_state) {
+		return;
+	}
+	XINPUT_STATE xinput_state = { 0 };
+	p->win32.xinput_get_state(0, &xinput_state);
+
+	p_pull_digital_button(&p->gamepad.a_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0);
+	p_pull_digital_button(&p->gamepad.b_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0);
+	p_pull_digital_button(&p->gamepad.x_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0);
+	p_pull_digital_button(&p->gamepad.y_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) != 0);
+
+	p_pull_digital_button(&p->gamepad.left_shoulder_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0);
+	p_pull_digital_button(&p->gamepad.right_shoulder_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
+	
+	p_pull_digital_button(&p->gamepad.up_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0);
+	p_pull_digital_button(&p->gamepad.down_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0);
+	p_pull_digital_button(&p->gamepad.left_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0);
+	p_pull_digital_button(&p->gamepad.right_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0);
+
+	p_pull_digital_button(&p->gamepad.left_thumb_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0);
+	p_pull_digital_button(&p->gamepad.right_thumb_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0);
+	
+	p_pull_digital_button(&p->gamepad.back_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK) != 0);
+	p_pull_digital_button(&p->gamepad.start_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_START) != 0);
+
+	p_pull_analog_button(&p->gamepad.left_trigger, xinput_state.Gamepad.bLeftTrigger / 255.f);
+	p_pull_analog_button(&p->gamepad.right_trigger, xinput_state.Gamepad.bRightTrigger / 255.f);
+
+	p_pull_axis(&p->gamepad.left_thumb_stick.x, xinput_state.Gamepad.sThumbLX / 32767.f);
+	p_pull_axis(&p->gamepad.left_thumb_stick.y, xinput_state.Gamepad.sThumbLY / 32767.f);
+	p_pull_axis(&p->gamepad.right_thumb_stick.x, xinput_state.Gamepad.sThumbRX / 32767.f);
+	p_pull_axis(&p->gamepad.right_thumb_stick.y, xinput_state.Gamepad.sThumbRY / 32767.f);
+
+}
+
+
 
 
 //pull, push, update
@@ -295,7 +356,7 @@ void p_pull(Play *p) {
 	p_pull_window(p);
 	p_pull_time(p);
 	p_pull_mouse(p);
-
+	p_pull_gamepad(p);
 }
 
 void p_push(Play *p) {
@@ -391,35 +452,35 @@ static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, 
 
 P_Bool p_initialize(Play *p) {
 	
-	if (!p->name) {
-		p->name = "Play";
+	if (!p->window.title) {
+		p->window.title = "Play";
 	}
 	int window_x;
-	if (p->pos.x) {
-		window_x = p->pos.x;
+	if (p->window.pos.x) {
+		window_x = p->window.pos.x;
 	}
 	else {
 		window_x = CW_USEDEFAULT;
 	}
 
 	int window_y;
-	if (p->pos.y) {
-		window_y = p->pos.y;
+	if (p->window.pos.y) {
+		window_y = p->window.pos.y;
 	}
 	else {
 		window_y = CW_USEDEFAULT;
 	}
 
 	int window_width;
-	if (p->size.x) {
-		window_width = p->size.x;
+	if (p->window.size.x) {
+		window_width = p->window.size.x;
 	}
 	else {
 		window_width = CW_USEDEFAULT;
 	}
 	int window_height;
-	if (p->size.y) {
-		window_height = p->size.y;
+	if (p->window.size.y) {
+		window_height = p->window.size.y;
 	}
 	else {
 		window_height = CW_USEDEFAULT;
@@ -444,6 +505,22 @@ P_Bool p_initialize(Play *p) {
 		}
 	}
 
+	HMODULE xinput_module = LoadLibraryA("XInput1_4.dll");
+	if (xinput_module) {
+		p->win32.xinput_get_state = (XINPUTGETSTATE)GetProcAddress(xinput_module, "XInputGetState");
+	}
+
+	float trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / 255.f;
+	float  left_thumb_threshold = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / 32767.f;
+	float  right_thumb_threshold = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE / 32767.f;
+
+	p->gamepad.left_trigger.threshold = trigger_threshold;
+	p->gamepad.right_trigger.threshold = trigger_threshold;
+	p->gamepad.left_thumb_stick.x.threshold = left_thumb_threshold;
+	p->gamepad.left_thumb_stick.y.threshold = left_thumb_threshold;
+	p->gamepad.right_thumb_stick.x.threshold = right_thumb_threshold;
+	p->gamepad.right_thumb_stick.y.threshold = right_thumb_threshold;
+
 	//
 	//Window creation
 	//
@@ -458,7 +535,7 @@ P_Bool p_initialize(Play *p) {
 		return P_FALSE;
 	}
 
-	p->win32.window = CreateWindowA("play", p->name, WS_OVERLAPPEDWINDOW | WS_VISIBLE, window_x, window_y, window_width, window_height, 0, 0, 0, 0);
+	p->win32.window = CreateWindowA("play", p->window.title, WS_OVERLAPPEDWINDOW | WS_VISIBLE, window_x, window_y, window_width, window_height, 0, 0, 0, 0);
 	if (!p->win32.window) {
 		p->error = "Failed to create window";
 		return P_FALSE;
