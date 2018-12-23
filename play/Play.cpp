@@ -5,6 +5,7 @@
 #include <malloc.h>
 #include <xinput.h>
 #include <math.h>
+#include <xaudio2.h>
 
 
 #define assert(x) \
@@ -29,9 +30,11 @@ enum {
 	P_CTRL = VK_CONTROL,
 	P_ALT = VK_MENU,
 	P_SHIFT = VK_SHIFT,
+	P_MAX_SOUND_BUFFER = 44100 / 30,
 };
 
 typedef uint8_t P_Bool;
+typedef int16_t P_SoundSample;
 
 struct P_Int2 {
 	int x;
@@ -91,11 +94,43 @@ struct P_Mouse {
 
 typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD dwUserIndex, XINPUT_STATE* pState);
 
+struct P_XAudio2Buffer {
+	XAUDIO2_BUFFER xaudio2_descriptor;
+	P_SoundSample samples[P_MAX_SOUND_BUFFER];
+	uint32_t samples_count;
+	HANDLE finished_event;
+};
+
+struct P_XAudio2VoiceCallback : public IXAudio2VoiceCallback {
+	void OnBufferEnd(void *user_data) {
+		P_XAudio2Buffer *buffer = (P_XAudio2Buffer *)user_data;
+		SetEvent(buffer->finished_event);
+	}
+	void OnStreamEnd() {}
+	void OnVoiceProcessingPassEnd() {}
+	void OnVoiceProcessingPassStart(UINT32) {}
+	void OnBufferStart(void *) {}
+	void OnLoopEnd(void *) {}
+	void OnVoiceError(void *, HRESULT) {}
+};
+
 struct P_Win32 {
 	HWND window;
 	void *main_fiber;
 	void *message_fiber;
+	
 	XINPUTGETSTATE xinput_get_state;
+	
+	IXAudio2 *xaudio2;
+	IXAudio2MasteringVoice *xaudio2_mastering_voice;
+	IXAudio2SourceVoice *xaudio2_source_voice;
+
+	P_XAudio2VoiceCallback xaudio_voice_callback;
+	P_XAudio2Buffer xaudio2_buffer1;
+	P_XAudio2Buffer xaudio2_buffer2;
+	P_XAudio2Buffer *xaudio2_front_buffer;
+	P_XAudio2Buffer *xaudio2_back_buffer;
+
 };
 
 struct P_Window {
@@ -127,7 +162,7 @@ struct Play {
 	uint64_t delta_nanoseconds;
 	uint64_t delta_microseconds;
 	uint64_t delta_milliseconds;
-	uint64_t delta_samples; //how many audio samples we need to calculate this frame
+	uint64_t delta_sound_samples; //how many audio samples we need to calculate this frame
 
 	double seconds; //53 bits of integer precision
 	uint64_t ticks;
@@ -141,8 +176,8 @@ struct Play {
 
 	//Sound
 	uint32_t sound_samples_per_second; //e.g. 44.4k
-	int16_t *sound_samples; //points to beginning of sample_buffer after update
-	int16_t sound_sample_buffer[P_MAX_SOUND_SAMPLES];
+	P_SoundSample *sound_samples; //points to beginning of sample_buffer after update
+	P_SoundSample sound_sample_buffer[P_MAX_SOUND_BUFFER];
 
 	//Text
 	char *text; //0 if no new text, stored in utf8
@@ -157,7 +192,7 @@ struct Play {
 	P_Win32 win32;
 };
 
-int16_t p_generate_sample() {
+P_SoundSample p_generate_sample() {
 	// ...
 	return 0;
 }
@@ -214,7 +249,7 @@ void p_pull_time(Play *p) {
 	p->delta_microseconds = p->delta_nanoseconds / 1000;
 	p->delta_milliseconds = p->delta_microseconds / 1000;
 	p->delta_seconds = (float)p->delta_ticks / (float)p->ticks_per_second;
-	//TODO: fill in delta_samples once we get to the sound processing
+	p->delta_sound_samples = (p->sound_samples_per_second * p->delta_ticks) / p->ticks_per_second;
 
 	p->nanoseconds = 1000 * 1000 * 1000 * (p->ticks / p->ticks_per_second);
 	p->microseconds = p->nanoseconds / 1000;
@@ -279,7 +314,12 @@ void p_pull_gamepad(Play *p) {
 		return;
 	}
 	XINPUT_STATE xinput_state = { 0 };
-	p->win32.xinput_get_state(0, &xinput_state);
+	if (p->win32.xinput_get_state(0, &xinput_state) != ERROR_SUCCESS) {
+		p->gamepad.connected = P_FALSE;
+		return;
+	}
+
+	p->gamepad.connected = P_TRUE;
 
 	p_pull_digital_button(&p->gamepad.a_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0);
 	p_pull_digital_button(&p->gamepad.b_button, (xinput_state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0);
@@ -353,8 +393,41 @@ void p_pull(Play *p) {
 	p_pull_gamepad(p);
 }
 
+void p_push_sound(Play *p) {
+	if (!p->win32.xaudio2) {
+		return;
+	}
+
+	size_t samples_written = p->sound_samples - p->sound_sample_buffer;
+
+	//fill remaining of the sound bufer with silence
+	for (size_t silent_sample_index = samples_written; silent_sample_index < p->delta_sound_samples; silent_sample_index++) {
+		p->sound_samples[silent_sample_index] = 0;
+	}
+
+	for (;;) {
+		P_XAudio2Buffer *back_buffer = p->win32.xaudio2_back_buffer;
+		size_t remaining_back_buffer_capacity = P_MAX_SOUND_BUFFER - back_buffer->samples_count;
+		if (remaining_back_buffer_capacity <= p->delta_sound_samples) {
+			CopyMemory(back_buffer->samples + back_buffer->samples_count, p->sound_sample_buffer, sizeof(P_SoundSample) * p->delta_sound_samples);
+			break;
+		}
+		else {
+			//fill as much as we can and submit
+			CopyMemory(back_buffer->samples + back_buffer->samples_count, p->sound_sample_buffer, sizeof(P_SoundSample) * remaining_back_buffer_capacity);
+			p->win32.xaudio2_source_voice->SubmitSourceBuffer(&back_buffer->xaudio2_descriptor, 0);
+			P_XAudio2Buffer *front_buffer = p->win32.xaudio2_front_buffer;
+			WaitForSingleObject(front_buffer->finished_event, INFINITE);
+			p->win32.xaudio2_back_buffer = front_buffer;
+			p->win32.xaudio2_front_buffer = back_buffer;
+		}
+	
+	}
+
+}
+
 void p_push(Play *p) {
-	// ...
+	p_push_sound(p);
 }
 
 void p_update(Play *p) {
@@ -444,6 +517,21 @@ static LRESULT CALLBACK p_window_proc(HWND window, UINT message, WPARAM wparam, 
 	return result;
 }
 
+
+void p_initialize_xaudio2_buffer(P_XAudio2Buffer *buffer){
+	buffer->xaudio2_descriptor.Flags = 0;
+	buffer->xaudio2_descriptor.AudioBytes = sizeof(buffer->samples);
+	buffer->xaudio2_descriptor.pAudioData = (BYTE*)buffer->samples;
+	buffer->xaudio2_descriptor.PlayBegin = 0;
+	buffer->xaudio2_descriptor.PlayLength = P_MAX_SOUND_BUFFER;
+	buffer->xaudio2_descriptor.LoopBegin = 0;
+	buffer->xaudio2_descriptor.LoopLength = 0;
+	buffer->xaudio2_descriptor.LoopCount = 0;
+	buffer->xaudio2_descriptor.pContext = buffer;
+
+	buffer->finished_event = CreateEvent(0, 0, 0, 0);
+}
+
 P_Bool p_initialize(Play *p) {
 	
 	if (!p->window.title) {
@@ -499,6 +587,10 @@ P_Bool p_initialize(Play *p) {
 		}
 	}
 
+	//
+	//Gamepad
+	//
+
 	HMODULE xinput_module = LoadLibraryA("XInput1_4.dll");
 	if (xinput_module) {
 		p->win32.xinput_get_state = (XINPUTGETSTATE)GetProcAddress(xinput_module, "XInputGetState");
@@ -512,6 +604,39 @@ P_Bool p_initialize(Play *p) {
 	p->gamepad.right_trigger.threshold = trigger_threshold;
 	p->gamepad.left_thumb_stick.threshold = left_thumb_threshold;
 	p->gamepad.right_thumb_stick.threshold = right_thumb_threshold;
+
+	//
+	//XAudio
+	//
+	HRESULT hresult = XAudio2Create(&p->win32.xaudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
+	if (SUCCEEDED(hresult)) {
+		//TODO: This point fails to initialize, needs to be fixed in the future
+		hresult = p->win32.xaudio2->CreateMasteringVoice(&p->win32.xaudio2_mastering_voice);
+		if (SUCCEEDED(hresult)) {
+			WAVEFORMATEX source_format = {0};
+			source_format.wFormatTag = WAVE_FORMAT_PCM;
+			source_format.nChannels = 2;
+			source_format.nSamplesPerSec = 44100;
+			source_format.wBitsPerSample = 16;
+			source_format.nBlockAlign = (source_format.nChannels * source_format.wBitsPerSample) / 8;
+			source_format.nAvgBytesPerSec = source_format.nSamplesPerSec / source_format.nBlockAlign;
+			hresult = p->win32.xaudio2->CreateSourceVoice(&p->win32.xaudio2_source_voice, (WAVEFORMATEX *)&source_format, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &p->win32.xaudio_voice_callback, 0, 0);
+			if (SUCCEEDED(hresult)) {
+				p_initialize_xaudio2_buffer(&p->win32.xaudio2_buffer1);
+				p_initialize_xaudio2_buffer(&p->win32.xaudio2_buffer1);
+				p->win32.xaudio2_front_buffer = &p->win32.xaudio2_buffer1;
+				p->win32.xaudio2_back_buffer = &p->win32.xaudio2_buffer2;
+				p->win32.xaudio2_source_voice->Start(0);
+
+			}
+			else {
+				p->win32.xaudio2->Release();
+			}
+		}
+		else {
+			p->win32.xaudio2->Release();
+		}
+	}
 
 
 	//
