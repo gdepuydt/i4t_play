@@ -38,11 +38,6 @@ struct P_Int2 {
 	int y;
 };
 
-struct P_Float2 {
-	float x;
-	float y;
-};
-
 struct P_DigitalButton {
 	P_Bool down;
 	P_Bool pressed; // !down -> down
@@ -57,15 +52,10 @@ struct P_AnalogButton {
 	P_Bool released; //down -> !down
 };
 
-struct P_Axis {
-	
-	float value;  //-1.0 to 1.0
-	float threshold; //deadzone threshold, (abs)value <= threshold gets clamped to 0
-};
-
 struct P_Stick {
-	P_Axis x;
-	P_Axis y;
+	float threshold;
+	float x;
+	float y;
 };
 
 struct P_Gamepad {
@@ -253,11 +243,15 @@ void p_pull_analog_button(P_AnalogButton *button, float value) {
 	button->released = was_down && !button->down;
 }
 
-void p_pull_axis(P_Axis *axis, float value) {
-	if (fabs(value) <= axis->threshold) {
-		axis->value = 0.0;
+void p_pull_stick(P_Stick *stick, float x, float y) {
+	if (fabs(x) <= stick->threshold) {
+		stick->x = 0.0;
 	}
-	axis->value = value;
+	stick->x = x;
+	if (fabs(y) <= stick->threshold) {
+		stick->y = 0.0;
+	}
+	stick->y = y;
 }
 
 void p_pull_keys(Play *p) {
@@ -309,11 +303,11 @@ void p_pull_gamepad(Play *p) {
 	p_pull_analog_button(&p->gamepad.left_trigger, xinput_state.Gamepad.bLeftTrigger / 255.f);
 	p_pull_analog_button(&p->gamepad.right_trigger, xinput_state.Gamepad.bRightTrigger / 255.f);
 
-	p_pull_axis(&p->gamepad.left_thumb_stick.x, xinput_state.Gamepad.sThumbLX / 32767.f);
-	p_pull_axis(&p->gamepad.left_thumb_stick.y, xinput_state.Gamepad.sThumbLY / 32767.f);
-	p_pull_axis(&p->gamepad.right_thumb_stick.x, xinput_state.Gamepad.sThumbRX / 32767.f);
-	p_pull_axis(&p->gamepad.right_thumb_stick.y, xinput_state.Gamepad.sThumbRY / 32767.f);
-
+	//Scale values between -1.0 and 1.0
+	#define CONVERT(x) (2.0f * (((x + 32768) / 65535.f) - 0.5f)) 
+	p_pull_stick(&p->gamepad.left_thumb_stick, CONVERT(xinput_state.Gamepad.sThumbLX + 32767.f), CONVERT(xinput_state.Gamepad.sThumbLY));
+	p_pull_stick(&p->gamepad.right_thumb_stick, CONVERT(xinput_state.Gamepad.sThumbRX + 32767.f), CONVERT(xinput_state.Gamepad.sThumbRY));
+	#undef CONVERT
 }
 
 
@@ -516,10 +510,9 @@ P_Bool p_initialize(Play *p) {
 
 	p->gamepad.left_trigger.threshold = trigger_threshold;
 	p->gamepad.right_trigger.threshold = trigger_threshold;
-	p->gamepad.left_thumb_stick.x.threshold = left_thumb_threshold;
-	p->gamepad.left_thumb_stick.y.threshold = left_thumb_threshold;
-	p->gamepad.right_thumb_stick.x.threshold = right_thumb_threshold;
-	p->gamepad.right_thumb_stick.y.threshold = right_thumb_threshold;
+	p->gamepad.left_thumb_stick.threshold = left_thumb_threshold;
+	p->gamepad.right_thumb_stick.threshold = right_thumb_threshold;
+
 
 	//
 	//Window creation
