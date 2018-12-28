@@ -9,16 +9,26 @@
 #include <windows.h>
 #include <wincodec.h>
 #include <xinput.h>
+#include <mmdeviceapi.h> 
+#include <audioclient.h>
 
 #include "Play.h"
 
 
-#if _DEBUG
-#define assert(x) \
+
+#define check(x) \
 	if(!(x)) { MessageBoxA(0, #x, "Assertion Failure", MB_OK); __debugbreak();}
+
+#define check_succeeded(x) check(SUCCEEDED(x))
+
+#ifdef __DEBUG
+#define assert(x) check(x)
 #else
 #define assert(x)
 #endif
+
+
+
 
 P_EXTERN_BEGIN
 
@@ -390,6 +400,49 @@ void p_gamepad_pull(Play *p) {
 	#undef CONVERT
 }
 
+//
+//Play_Audio
+//
+
+/*
+static void p_audio_default_callback(P_AudioRequest *request) {
+	FillMemory(request->sample, sizeof(int16_t) * (request->end_sample - request->sample), 0);
+}*/
+
+
+
+P_Bool p_audio_initialize(Play *p) {
+	/*if (!p->audio.callback) {
+		p->audio.callback = p_audio_default_callback;
+	}*/
+	check_succeeded(CoInitializeEx(0, COINITBASE_MULTITHREADED));
+
+	IMMDeviceEnumerator *device_enumerator;
+	check_succeeded(CoCreateInstance(__uuidof(MMDeviceEnumerator), 0, CLSCTX_INPROC, IID_PPV_ARGS(&device_enumerator)));
+	
+	IMMDevice *audio_device;
+	check_succeeded(device_enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &audio_device));
+	
+	IAudioClient *audio_client;
+	check_succeeded(audio_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void **)&audio_client));
+
+	REFERENCE_TIME device_period;
+	check_succeeded(audio_client->GetDevicePeriod(0, &device_period));
+
+	WAVEFORMATEX audio_format = { 0 };
+	audio_format.wFormatTag = WAVE_FORMAT_PCM;
+	audio_format.nChannels = 1;
+	audio_format.nSamplesPerSec = 44100;
+	audio_format.wBitsPerSample = 16;
+	audio_format.nBlockAlign = (audio_format.nChannels * audio_format.wBitsPerSample) / 8;
+	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;
+	
+	DWORD audio_client_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
+	HRESULT hresult = (audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, device_period, device_period, &audio_format, 0));
+
+	return P_TRUE;
+}
+
 
 //
 //Play
@@ -433,6 +486,11 @@ P_Bool p_initialize(Play *p) {
 	if (!p_gamepad_initialize(p)) {
 		return P_FALSE;
 	}
+
+	if (!p_audio_initialize(p)) {
+		return P_FALSE;
+	}
+
 	p->initialized = P_TRUE;
 	p_pull(p);
 	return P_TRUE;

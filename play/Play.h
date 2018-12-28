@@ -97,10 +97,19 @@ struct P_AudioFormat {
 	uint32_t bytes_per_sample;
 };
 
-struct Mu_AudioBuffer {
+struct P_AudioBuffer {
 	int16_t *samples;
 	size_t samples_count;
 	P_AudioFormat format;
+};
+
+struct P_AudioRequest {
+	int16_t end_sample;
+	void *sample;
+};
+
+struct P_Audio {
+	P_AudioRequest callback;
 };
 
 struct P_Time {
@@ -152,6 +161,7 @@ struct Play {
 	P_Gamepad gamepad;
 	P_Mouse mouse;
 	P_Time time;
+	P_Audio audio;
 	P_Win32 win32;
 	char text[P_MAX_TEXT];
 	size_t text_length;
