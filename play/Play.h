@@ -104,12 +104,20 @@ struct P_AudioBuffer {
 };
 
 struct P_AudioRequest {
-	int16_t end_sample;
-	void *sample;
+	int16_t *sample;
+	int16_t *end_sample;
+	uint32_t samples_per_second;
+	uint32_t channels;
+	uint32_t bytes_per_sample;
 };
 
+typedef void(*P_AudioCallback)(P_AudioRequest *request);
+
 struct P_Audio {
-	P_AudioRequest callback;
+	uint32_t samples_per_second;
+	uint32_t channels;
+	uint32_t bytes_per_sample;
+	P_AudioCallback callback;
 };
 
 struct P_Time {
@@ -134,6 +142,9 @@ typedef void *HANDLE;
 typedef struct _XINPUT_STATE XINPUT_STATE;
 typedef unsigned long(__stdcall *XINPUTGETSTATE)(unsigned long dwUserIndex, XINPUT_STATE* pState);
 
+struct IAudioClient;
+struct IAudioRenderClient;
+
 struct P_Win32 {
 	HANDLE window;
 	HANDLE device_context;
@@ -142,6 +153,9 @@ struct P_Win32 {
 	void *message_fiber;
 
 	XINPUTGETSTATE xinput_get_state;
+
+	IAudioClient *audio_client;
+	IAudioRenderClient *audio_render_client;
 
 	HANDLE wgl_context;
 };

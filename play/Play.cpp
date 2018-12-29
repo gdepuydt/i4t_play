@@ -409,7 +409,28 @@ static void p_audio_default_callback(P_AudioRequest *request) {
 	FillMemory(request->sample, sizeof(int16_t) * (request->end_sample - request->sample), 0);
 }*/
 
-
+DWORD p_audio_threadproc(void *parameter) {
+	Play *p = (Play *)parameter;
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	HANDLE buffer_ready_event = CreateEvent(0, 0, 0, 0);
+	p->win32.audio_client->SetEventHandle(buffer_ready_event);
+	uint32_t buffer_frame_count;
+	p->win32.audio_client->GetBufferSize(&buffer_frame_count);
+	size_t sample_count = buffer_frame_count * p->audio.channels;
+	p->win32.audio_client->Start();
+	for (;;) {
+		WaitForSingleObject(buffer_ready_event, INFINITE);
+		P_AudioRequest request;
+		request.samples_per_second = p->audio.samples_per_second;
+		request.channels = p->audio.channels;
+		request.bytes_per_sample = p->audio.bytes_per_sample;
+		p->win32.audio_render_client->GetBuffer(buffer_frame_count, (BYTE**)&request.sample);
+		request.end_sample = request.sample + sample_count;
+		p->audio.callback(&request);
+		p->win32.audio_render_client->ReleaseBuffer(buffer_frame_count, 0);
+	}
+	return 0;
+}
 
 P_Bool p_audio_initialize(Play *p) {
 	/*if (!p->audio.callback) {
@@ -438,8 +459,17 @@ P_Bool p_audio_initialize(Play *p) {
 	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;
 	
 	DWORD audio_client_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
-	HRESULT hresult = (audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, device_period, device_period, &audio_format, 0));
+	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, device_period, device_period, &audio_format, 0));
 
+	IAudioRenderClient *audio_render_client;
+	check_succeeded(audio_client->GetService(IID_PPV_ARGS(&audio_render_client)));
+	
+	p->audio.samples_per_second = audio_format.nSamplesPerSec;
+	p->win32.audio_client = audio_client;
+	p->win32.audio_render_client = audio_render_client;
+	CreateThread(0, 0, p_audio_threadproc, p, 0, 0);
+	
+	device_enumerator->Release();
 	return P_TRUE;
 }
 
