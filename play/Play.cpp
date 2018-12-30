@@ -404,10 +404,10 @@ void p_gamepad_pull(Play *p) {
 //Play_Audio
 //
 
-/*
+
 static void p_audio_default_callback(P_AudioRequest *request) {
 	FillMemory(request->sample, sizeof(int16_t) * (request->end_sample - request->sample), 0);
-}*/
+}
 
 DWORD p_audio_threadproc(void *parameter) {
 	Play *p = (Play *)parameter;
@@ -416,26 +416,31 @@ DWORD p_audio_threadproc(void *parameter) {
 	p->win32.audio_client->SetEventHandle(buffer_ready_event);
 	uint32_t buffer_frame_count;
 	p->win32.audio_client->GetBufferSize(&buffer_frame_count);
-	size_t sample_count = buffer_frame_count * p->audio.channels;
+	uint32_t buffer_sample_count = buffer_frame_count * p->audio.channels;
 	p->win32.audio_client->Start();
 	for (;;) {
-		WaitForSingleObject(buffer_ready_event, INFINITE);
+		DWORD wait_result = WaitForSingleObject(buffer_ready_event, INFINITE);
+		check(wait_result == WAIT_OBJECT_0);
 		P_AudioRequest request;
 		request.samples_per_second = p->audio.samples_per_second;
 		request.channels = p->audio.channels;
 		request.bytes_per_sample = p->audio.bytes_per_sample;
-		p->win32.audio_render_client->GetBuffer(buffer_frame_count, (BYTE**)&request.sample);
-		request.end_sample = request.sample + sample_count;
+		uint32_t padding_frame_count;
+		p->win32.audio_client->GetCurrentPadding(&padding_frame_count);
+		uint32_t padding_sample_count = padding_frame_count * p->audio.channels;
+		uint32_t fill_sample_count = buffer_sample_count - padding_sample_count;
+		p->win32.audio_render_client->GetBuffer(fill_sample_count, (BYTE**)&request.sample);
+		request.end_sample = request.sample + fill_sample_count;
 		p->audio.callback(&request);
-		p->win32.audio_render_client->ReleaseBuffer(buffer_frame_count, 0);
+		p->win32.audio_render_client->ReleaseBuffer(fill_sample_count, 0);
 	}
 	return 0;
 }
 
 P_Bool p_audio_initialize(Play *p) {
-	/*if (!p->audio.callback) {
+	if (!p->audio.callback) {
 		p->audio.callback = p_audio_default_callback;
-	}*/
+	}
 	check_succeeded(CoInitializeEx(0, COINITBASE_MULTITHREADED));
 
 	IMMDeviceEnumerator *device_enumerator;
@@ -457,14 +462,18 @@ P_Bool p_audio_initialize(Play *p) {
 	audio_format.wBitsPerSample = 16;
 	audio_format.nBlockAlign = (audio_format.nChannels * audio_format.wBitsPerSample) / 8;
 	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;
+
+	//REFERENCE_TIME audio_buffer_duration = 300000;
 	
 	DWORD audio_client_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
-	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, device_period, device_period, &audio_format, 0));
+	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, 0, 0, &audio_format, 0));
 
 	IAudioRenderClient *audio_render_client;
 	check_succeeded(audio_client->GetService(IID_PPV_ARGS(&audio_render_client)));
 	
 	p->audio.samples_per_second = audio_format.nSamplesPerSec;
+	p->audio.channels = 1;
+	p->audio.bytes_per_sample = 2;
 	p->win32.audio_client = audio_client;
 	p->win32.audio_render_client = audio_render_client;
 	CreateThread(0, 0, p_audio_threadproc, p, 0, 0);
@@ -472,7 +481,6 @@ P_Bool p_audio_initialize(Play *p) {
 	device_enumerator->Release();
 	return P_TRUE;
 }
-
 
 //
 //Play

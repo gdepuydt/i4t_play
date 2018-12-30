@@ -7,18 +7,21 @@ extern "C" {
 
 static Play p;
 
+uint32_t sample_index;
+float frequency = 500;
 float gain = 1.0f;
 float amplitude = 1.0f;
-float frequency= 500;
 float wobble_amplitude;
 float wobble_frequency;
 
 bool fade_out;
 bool fade_in;
 
-float fade_step;
+float fade_step = 0.0001f;
 
-int sample_index;
+float lerp(float x, float y, float t) {
+	return (1 - t)*x + t * y;
+}
 
 
 void audio_callback(P_AudioRequest *request) {
@@ -60,15 +63,19 @@ void WinMain() {
 	p_initialize(&p);
 
 	while (p_pull(&p)) {
-
-		static float last_print_time = 0.0;
-		if ((p.time.seconds - last_print_time) > 1.0f) {
-			debug_out("x=%d, y=%d, dx=%d, dy=%d\n", p.window.pos.x, p.window.pos.y, p.window.size.x, p.window.size.y);
-			debug_out("delta_ticks = %llu, time_ticks = %llu\n", p.time.delta_ticks, p.time.ticks);
-			last_print_time = p.time.seconds;
+		if (p.mouse.left_button.pressed) {
+			debug_out("LMB pressed: %d; %d\n", p.mouse.position.x, p.mouse.position.y);
+			frequency = (float)p.mouse.position.x;
+			if (frequency < 0.0f) {
+				frequency = 0.0f;
+			}
+			amplitude = (float)p.mouse.position.y / (float)p.window.size.y;
+			if (amplitude <= 0.0f) {
+				amplitude = 0.0f;
+			}
+			if (amplitude >= 0.0f) {
+				amplitude = 1.0f;
+			}
 		}
-		/*if (p.window.resized) {
-			debug_out("Window resized: %d, %d\n", p.window.size.x, p.window.size.y);
-		}*/
 	}
 }
