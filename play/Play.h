@@ -138,6 +138,7 @@ struct P_Time {
 	uint64_t ticks_per_second;
 };
 
+
 typedef void *HANDLE;
 typedef struct _XINPUT_STATE XINPUT_STATE;
 typedef unsigned long(__stdcall *XINPUTGETSTATE)(unsigned long dwUserIndex, XINPUT_STATE* pState);

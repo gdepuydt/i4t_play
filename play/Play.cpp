@@ -463,7 +463,7 @@ P_Bool p_audio_initialize(Play *p) {
 	audio_format.nBlockAlign = (audio_format.nChannels * audio_format.wBitsPerSample) / 8;
 	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;
 
-	//REFERENCE_TIME audio_buffer_duration = 300000;
+	//REFERENCE_TIME audio_buffer_duration = 300000; //30 milliseconds
 	
 	DWORD audio_client_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
 	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, 0, 0, &audio_format, 0));
@@ -480,6 +480,41 @@ P_Bool p_audio_initialize(Play *p) {
 	
 	device_enumerator->Release();
 	return P_TRUE;
+}
+
+//
+//OpenGL
+//
+
+void p_opengl_push(Play *p) {
+	SwapBuffers(p->win32.device_context);
+}
+
+
+P_Bool p_opengl_initialize(Play *p) {
+	PIXELFORMATDESCRIPTOR pixel_format_descriptor;
+	pixel_format_descriptor.nSize = sizeof(pixel_format_descriptor);
+	pixel_format_descriptor.dwFlags = LPD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER;
+	pixel_format_descriptor.iPixelType = PFD_TYPE_RGBA;
+	pixel_format_descriptor.cColorBits = 24;
+	pixel_format_descriptor.cAlphaBits = 0;
+	pixel_format_descriptor.cDepthBits = 24;
+	pixel_format_descriptor.cStencilBits = 8;
+	int pixel_format = ChoosePixelFormat(p->win32.device_context, &pixel_format_descriptor);
+	if (!pixel_format) {
+		return P_FALSE;
+	}
+	if (!DescribePixelFormat(p->win32.device_context, pixel_format, sizeof(pixel_format_descriptor), &pixel_format_descriptor)) {
+		return P_FALSE;
+	}
+	if (!SetPixelFormat(p->win32.device_context, pixel_format, &pixel_format_descriptor)) {
+		return P_FALSE;
+	}
+	p->win32.wgl_context = wglCreateContext(p->win32.device_context);
+	if (!p->win32.wgl_context) {
+		return P_FALSE;
+	}
+	wglMakeCurrent(p->win32.device_context, p->win32.wgl_context);
 }
 
 //
@@ -503,7 +538,7 @@ P_Bool p_pull(Play *p) {
 }
 
 void p_push(Play *p) {
-	// ...
+	p_opengl_push(p);
 }
 
 P_Bool p_initialize(Play *p) {
@@ -526,6 +561,10 @@ P_Bool p_initialize(Play *p) {
 	}
 
 	if (!p_audio_initialize(p)) {
+		return P_FALSE;
+	}
+
+	if (!p_opengl_initialize(p)) {
 		return P_FALSE;
 	}
 

@@ -9,15 +9,15 @@ static Play p;
 
 uint32_t sample_index;
 float frequency = 500;
-float gain = 1.0f;
+float gain = 0.5f;
 float amplitude = 1.0f;
 float wobble_amplitude;
 float wobble_frequency;
 
-bool fade_out;
-bool fade_in;
+bool fade_out = P_TRUE;
+bool fade_in = P_TRUE;
 
-float fade_step = 0.0001f;
+float fade_step = 0.00001f;
 
 float lerp(float x, float y, float t) {
 	return (1 - t)*x + t * y;
@@ -58,7 +58,7 @@ void WinMain() {
 	amplitude = 0.1f;
 	wobble_amplitude = 50.0f;
 	wobble_frequency = 2.0f;
-	p.audio.callback = (P_AudioCallback)audio_callback;
+	//p.audio.callback = (P_AudioCallback)audio_callback; //play sound
 	
 	p_initialize(&p);
 
@@ -77,5 +77,6 @@ void WinMain() {
 				amplitude = 1.0f;
 			}
 		}
+		p_push(&p);
 	}
 }
