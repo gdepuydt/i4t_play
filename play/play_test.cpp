@@ -1,9 +1,11 @@
 #include <math.h>
+#include <windows.h>
+#include <gl/gl.h>
 #include "Play.h"
 
-extern "C" {
+/*extern "C" {
 	int _fltused;
-}
+}*/
 
 static Play p;
 
@@ -52,7 +54,7 @@ void audio_callback(P_AudioRequest *request) {
 	}
 }
 
-void WinMain() {
+int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 	sample_index = 0;
 	frequency = 500.0f;
 	amplitude = 0.1f;
@@ -77,6 +79,16 @@ void WinMain() {
 				amplitude = 1.0f;
 			}
 		}
+		glViewport(0, 0, p.window.size.x, p.window.size.y);
+		glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glBegin(GL_QUADS);
+		glColor3f(0.0f, 0.0f, 1.0f);
+		glVertex2f(-0.5f, -0.5f);
+		glVertex2f(0.5f, -0.5f);
+		glVertex2f(0.5f, 0.5f);
+		glVertex2f(-0.5f, 0.5f);
+		glEnd();
 		p_push(&p);
 	}
 }
