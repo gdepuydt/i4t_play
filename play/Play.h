@@ -186,6 +186,14 @@ P_Bool p_initialize(Play *p);
 P_Bool p_pull(Play *p);
 void p_push(Play *p);
 
+struct P_Image {
+	uint8_t *pixels;
+	uint32_t channels;
+	uint32_t width;
+	uint32_t height;
+};
+
+
 void debug_out(const char *format, ...);
 
 P_EXTERN_END

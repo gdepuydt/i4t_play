@@ -60,7 +60,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	amplitude = 0.1f;
 	wobble_amplitude = 50.0f;
 	wobble_frequency = 2.0f;
-	//p.audio.callback = (P_AudioCallback)audio_callback; //play sound
+	p.audio.callback = (P_AudioCallback)audio_callback; //play sound
 	
 	p_initialize(&p);
 
@@ -79,6 +79,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 				amplitude = 1.0f;
 			}
 		}
+
 		glViewport(0, 0, p.window.size.x, p.window.size.y);
 		glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);

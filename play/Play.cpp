@@ -517,6 +517,8 @@ P_Bool p_opengl_initialize(Play *p) {
 	wglMakeCurrent(p->win32.device_context, p->win32.wgl_context);
 }
 
+
+
 //
 //Play
 //
@@ -571,6 +573,60 @@ P_Bool p_initialize(Play *p) {
 	p->initialized = P_TRUE;
 	p_pull(p);
 	return P_TRUE;
+}
+
+//
+// Utilities
+//
+
+
+//
+//P_Image
+//
+
+static IWICImagingFactory *wic_factory; //TODO: multithreading
+static CRITICAL_SECTION wic_factory_critical_section;
+
+P_Bool p_load_image(const char *filename, P_Image *image) {
+	if (!wic_factory) {
+		if (TryEnterCriticalSection(&wic_factory_critical_section)) {
+			if (!CoCreateInstance(__uuidof(IWICImagingFactory), 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory))) {
+				return P_FALSE;
+			}
+			LeaveCriticalSection(&wic_factory_critical_section);
+		}
+		
+	}
+	IWICBitmapDecoder *image_decoder = 0;
+	IWICBitmapFrameDecode *image_frame = 0;
+	P_Bool result = P_FALSE;
+	int wide_filename_length = MultiByteToWideChar(CP_UTF8, 0, filename, -1, 0, 0);
+	WCHAR *wide_filename = (WCHAR *)_alloca(wide_filename_length * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, filename, -1, wide_filename, wide_filename_length);
+	
+	if (!SUCCEEDED(wic_factory->CreateDecoderFromFilename(wide_filename, 0, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &image_decoder))) {
+		goto done;
+	}
+	if (!SUCCEEDED(image_decoder->GetFrame(0, &image_frame))) {
+		goto done;
+	}
+	
+	//get pixel format
+	UINT width;
+	UINT height;
+	image_frame->GetSize(&width, &height);
+	image->width = width;
+	image->height = height;
+	result = P_TRUE;
+	
+done:
+	if (image_decoder) {
+		image_decoder->Release();
+	}
+	if (image_frame) {
+		image_frame->Release();
+	}
+	return result;
 }
 
 P_EXTERN_END
