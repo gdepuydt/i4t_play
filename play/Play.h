@@ -192,6 +192,7 @@ struct P_Image {
 	uint32_t width;
 	uint32_t height;
 };
+P_Bool p_load_image(const char *filename, P_Image *image);
 
 
 void debug_out(const char *format, ...);

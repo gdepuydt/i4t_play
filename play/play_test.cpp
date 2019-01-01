@@ -55,6 +55,10 @@ void audio_callback(P_AudioRequest *request) {
 }
 
 int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+	
+	P_Image image;
+	P_Bool load_image_result = p_load_image("c:\\dev\\i4t_play\\lena.png", &image);
+
 	sample_index = 0;
 	frequency = 500.0f;
 	amplitude = 0.1f;
@@ -63,7 +67,11 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	p.audio.callback = (P_AudioCallback)audio_callback; //play sound
 	
 	p_initialize(&p);
-
+	glEnable(GL_TEXTURE_2D);
+	GLuint texture;
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.pixels);
 	while (p_pull(&p)) {
 		if (p.mouse.left_button.pressed) {
 			debug_out("LMB pressed: %d; %d\n", p.mouse.position.x, p.mouse.position.y);
@@ -84,11 +92,14 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glBegin(GL_QUADS);
-		glColor3f(0.0f, 0.0f, 1.0f);
-		glVertex2f(-0.5f, -0.5f);
-		glVertex2f(0.5f, -0.5f);
-		glVertex2f(0.5f, 0.5f);
-		glVertex2f(-0.5f, 0.5f);
+		glTexCoord2f(0.0f, 0.0f);
+		glVertex2f(-1.0f, -1.0f);
+		glTexCoord2f(1.0f, 0.0f);
+		glVertex2f(1.0f, -1.0f);
+		glTexCoord2f(1.0f, 1.0f);
+		glVertex2f(1.0f, 1.0f);
+		glTexCoord2f(0.0f, 1.0f);
+		glVertex2f(-1.0f, 1.0f);
 		glEnd();
 		p_push(&p);
 	}

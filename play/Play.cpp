@@ -585,21 +585,27 @@ P_Bool p_initialize(Play *p) {
 //
 
 static IWICImagingFactory *wic_factory; //TODO: multithreading
-static CRITICAL_SECTION wic_factory_critical_section;
+static SRWLOCK  wic_factory_lock = SRWLOCK_INIT;
 
 P_Bool p_load_image(const char *filename, P_Image *image) {
 	if (!wic_factory) {
-		if (TryEnterCriticalSection(&wic_factory_critical_section)) {
-			if (!CoCreateInstance(__uuidof(IWICImagingFactory), 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory))) {
+		AcquireSRWLockExclusive(&wic_factory_lock);
+		if (!wic_factory) {
+			CoInitializeEx(0, COINITBASE_MULTITHREADED);
+			if (!SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory)))) {
+				ReleaseSRWLockExclusive(&wic_factory_lock);
 				return P_FALSE;
 			}
-			LeaveCriticalSection(&wic_factory_critical_section);
+			ReleaseSRWLockExclusive(&wic_factory_lock);
 		}
-		
 	}
+	P_Bool result = P_FALSE;
 	IWICBitmapDecoder *image_decoder = 0;
 	IWICBitmapFrameDecode *image_frame = 0;
-	P_Bool result = P_FALSE;
+	IWICBitmapSource *rgba_image_frame = 0;
+	uint32_t buffer_size = 0;
+	uint32_t buffer_stride = 0;
+
 	int wide_filename_length = MultiByteToWideChar(CP_UTF8, 0, filename, -1, 0, 0);
 	WCHAR *wide_filename = (WCHAR *)_alloca(wide_filename_length * sizeof(WCHAR));
 	MultiByteToWideChar(CP_UTF8, 0, filename, -1, wide_filename, wide_filename_length);
@@ -610,13 +616,24 @@ P_Bool p_load_image(const char *filename, P_Image *image) {
 	if (!SUCCEEDED(image_decoder->GetFrame(0, &image_frame))) {
 		goto done;
 	}
-	
-	//get pixel format
-	UINT width;
-	UINT height;
+	if (!SUCCEEDED(WICConvertBitmapSource(GUID_WICPixelFormat32bppRGBA, image_frame, &rgba_image_frame))) {
+		goto done;
+	}
+
+	uint32_t width;
+	uint32_t height;
 	image_frame->GetSize(&width, &height);
 	image->width = width;
 	image->height = height;
+	image->channels = 4;
+	buffer_size = 4 * width * height;
+	image->pixels = (uint8_t *)malloc(buffer_size);
+	buffer_stride = 4 * width;
+	if (!SUCCEEDED(rgba_image_frame->CopyPixels(0, buffer_stride, buffer_size, image->pixels))) {
+		free(image->pixels);
+		goto done;
+	}
+
 	result = P_TRUE;
 	
 done:
@@ -625,6 +642,9 @@ done:
 	}
 	if (image_frame) {
 		image_frame->Release();
+	}
+	if (rgba_image_frame) {
+		rgba_image_frame->Release();
 	}
 	return result;
 }
