@@ -67,10 +67,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	p.audio.callback = (P_AudioCallback)audio_callback; //play sound
 	
 	p_initialize(&p);
+	
 	glEnable(GL_TEXTURE_2D);
 	GLuint texture;
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.pixels);
 	while (p_pull(&p)) {
 		if (p.mouse.left_button.pressed) {
@@ -91,6 +93,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		glViewport(0, 0, p.window.size.x, p.window.size.y);
 		glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
+		glBindTexture(GL_TEXTURE_2D, texture);
 		glBegin(GL_QUADS);
 		glTexCoord2f(0.0f, 0.0f);
 		glVertex2f(-1.0f, -1.0f);
