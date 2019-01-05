@@ -103,20 +103,10 @@ struct P_AudioBuffer {
 	P_AudioFormat format;
 };
 
-struct P_AudioRequest {
-	int16_t *sample;
-	int16_t *end_sample;
-	uint32_t samples_per_second;
-	uint32_t channels;
-	uint32_t bytes_per_sample;
-};
-
-typedef void(*P_AudioCallback)(P_AudioRequest *request);
+typedef void(*P_AudioCallback)(P_AudioBuffer *buffer);
 
 struct P_Audio {
-	uint32_t samples_per_second;
-	uint32_t channels;
-	uint32_t bytes_per_sample;
+	P_AudioFormat format;
 	P_AudioCallback callback;
 };
 
@@ -193,6 +183,7 @@ struct P_Image {
 	uint32_t height;
 };
 P_Bool p_load_image(const char *filename, P_Image *image);
+P_Bool p_load_audio(const char *filename, P_AudioBuffer *audio);
 
 
 void debug_out(const char *format, ...);

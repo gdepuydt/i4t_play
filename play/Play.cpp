@@ -11,6 +11,9 @@
 #include <xinput.h>
 #include <mmdeviceapi.h> 
 #include <audioclient.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
 
 #include "Play.h"
 
@@ -405,8 +408,8 @@ void p_gamepad_pull(Play *p) {
 //
 
 
-static void p_audio_default_callback(P_AudioRequest *request) {
-	FillMemory(request->sample, sizeof(int16_t) * (request->end_sample - request->sample), 0);
+static void p_audio_default_callback(P_AudioBuffer *buffer) {
+	FillMemory(buffer->samples, sizeof(int16_t) * buffer->samples_count, 0);
 }
 
 DWORD p_audio_threadproc(void *parameter) {
@@ -416,26 +419,27 @@ DWORD p_audio_threadproc(void *parameter) {
 	p->win32.audio_client->SetEventHandle(buffer_ready_event);
 	uint32_t buffer_frame_count;
 	p->win32.audio_client->GetBufferSize(&buffer_frame_count);
-	uint32_t buffer_sample_count = buffer_frame_count * p->audio.channels;
+	uint32_t buffer_sample_count = buffer_frame_count * p->audio.format.channels;
 	p->win32.audio_client->Start();
 	for (;;) {
 		DWORD wait_result = WaitForSingleObject(buffer_ready_event, INFINITE);
 		check(wait_result == WAIT_OBJECT_0);
-		P_AudioRequest request;
-		request.samples_per_second = p->audio.samples_per_second;
-		request.channels = p->audio.channels;
-		request.bytes_per_sample = p->audio.bytes_per_sample;
+		P_AudioBuffer buffer;
+		buffer.format = p->audio.format;
 		uint32_t padding_frame_count;
 		p->win32.audio_client->GetCurrentPadding(&padding_frame_count);
-		uint32_t padding_sample_count = padding_frame_count * p->audio.channels;
+		uint32_t padding_sample_count = padding_frame_count * buffer.format.channels;
 		uint32_t fill_sample_count = buffer_sample_count - padding_sample_count;
-		p->win32.audio_render_client->GetBuffer(fill_sample_count, (BYTE**)&request.sample);
-		request.end_sample = request.sample + fill_sample_count;
-		p->audio.callback(&request);
+		p->win32.audio_render_client->GetBuffer(fill_sample_count, (BYTE**)&buffer.samples);
+		buffer.samples_count = fill_sample_count;
+		p->audio.callback(&buffer);
 		p->win32.audio_render_client->ReleaseBuffer(fill_sample_count, 0);
 	}
 	return 0;
 }
+
+static WAVEFORMATEX win32_audio_format = {WAVE_FORMAT_PCM, 1, 44100, 44100 * 2, 2, 16, 0};
+static P_AudioFormat p_audio_format = {44100, 1, 2};
 
 P_Bool p_audio_initialize(Play *p) {
 	if (!p->audio.callback) {
@@ -455,25 +459,25 @@ P_Bool p_audio_initialize(Play *p) {
 	REFERENCE_TIME device_period;
 	check_succeeded(audio_client->GetDevicePeriod(0, &device_period));
 
-	WAVEFORMATEX audio_format = { 0 };
+	/*WAVEFORMATEX audio_format = { 0 };
 	audio_format.wFormatTag = WAVE_FORMAT_PCM;
 	audio_format.nChannels = 1;
 	audio_format.nSamplesPerSec = 44100;
 	audio_format.wBitsPerSample = 16;
 	audio_format.nBlockAlign = (audio_format.nChannels * audio_format.wBitsPerSample) / 8;
-	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;
+	audio_format.nAvgBytesPerSec = audio_format.nSamplesPerSec * audio_format.nBlockAlign;*/
 
-	//REFERENCE_TIME audio_buffer_duration = 300000; //30 milliseconds
+	REFERENCE_TIME audio_buffer_duration = 300000; //30 milliseconds
 	
 	DWORD audio_client_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
-	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, 0, 0, &audio_format, 0));
+	check_succeeded(audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, audio_client_flags, audio_buffer_duration, 0, &win32_audio_format, 0));
 
 	IAudioRenderClient *audio_render_client;
 	check_succeeded(audio_client->GetService(IID_PPV_ARGS(&audio_render_client)));
 	
-	p->audio.samples_per_second = audio_format.nSamplesPerSec;
-	p->audio.channels = 1;
-	p->audio.bytes_per_sample = 2;
+	p->audio.format.samples_per_second = win32_audio_format.nSamplesPerSec;
+	p->audio.format.channels = win32_audio_format.nChannels;
+	p->audio.format.bytes_per_sample = (win32_audio_format.nChannels * win32_audio_format.wBitsPerSample) / 8;
 	p->win32.audio_client = audio_client;
 	p->win32.audio_render_client = audio_render_client;
 	CreateThread(0, 0, p_audio_threadproc, p, 0, 0);
@@ -516,7 +520,6 @@ P_Bool p_opengl_initialize(Play *p) {
 	}
 	wglMakeCurrent(p->win32.device_context, p->win32.wgl_context);
 }
-
 
 
 //
@@ -647,6 +650,105 @@ done:
 		rgba_image_frame->Release();
 	}
 	return result;
+}
+
+//
+//Sound Media
+//
+
+static P_Bool mf_initialized;
+
+P_Bool p_load_audio(const char *filename, P_AudioBuffer *audio) {
+	if (!mf_initialized) {
+		CoInitializeEx(0, COINIT_MULTITHREADED);
+		if (!SUCCEEDED(MFStartup(MF_VERSION, 0))) {
+			return P_FALSE;
+		}
+		mf_initialized = true;
+	}
+	int wide_filename_length = MultiByteToWideChar(CP_UTF8, 0, filename, -1, 0, 0);
+	WCHAR *wide_filename = (WCHAR *)_alloca(wide_filename_length * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, filename, -1, wide_filename, wide_filename_length);
+	
+	IMFSourceReader *source_reader = 0;
+	IMFMediaType *media_type = 0;
+
+	P_Bool result = P_FALSE;
+	size_t buffer_capacity = p_audio_format.samples_per_second * p_audio_format.bytes_per_sample;
+	size_t buffer_size = 0;
+	char *buffer = (char *)malloc(buffer_capacity);
+	DWORD flags = 0;
+	
+	if (!SUCCEEDED(MFCreateSourceReaderFromURL(wide_filename, 0, &source_reader))) {
+		goto done;
+	}
+	if (!SUCCEEDED(MFCreateMediaType(&media_type))) {
+		goto done;
+	}
+	media_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+	media_type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+	media_type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, win32_audio_format.nChannels);
+	media_type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, win32_audio_format.nSamplesPerSec);
+	media_type->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, win32_audio_format.nBlockAlign);
+	media_type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, win32_audio_format.nAvgBytesPerSec);
+	media_type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, win32_audio_format.wBitsPerSample);
+	media_type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+	if (!SUCCEEDED(source_reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, media_type))) {
+		goto done;
+	}
+	
+	for (;;) {
+		DWORD stream_index;
+		LONGLONG timestamp;
+		IMFSample *sample;
+		if (!SUCCEEDED(source_reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &stream_index, &flags, &timestamp, &sample))) {
+			free(buffer);
+			goto done;
+		}
+		
+		if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
+			break;
+		}
+		IMFMediaBuffer *sample_buffer;
+		sample->ConvertToContiguousBuffer(&sample_buffer);
+		DWORD sample_buffer_size;
+		sample_buffer->GetCurrentLength(&sample_buffer_size);
+		size_t new_buffer_size = buffer_size + sample_buffer_size;
+		if (new_buffer_size > buffer_capacity) {
+			buffer_capacity *= 2;
+			if (buffer_capacity < new_buffer_size) {
+				buffer_capacity = new_buffer_size;
+			}
+			buffer = (char *)realloc(buffer, buffer_capacity);
+		}
+		BYTE *sample_buffer_pointer;
+		sample_buffer->Lock(&sample_buffer_pointer, 0, 0);
+		CopyMemory(buffer + buffer_size, sample_buffer_pointer, sample_buffer_size);
+		buffer_size += sample_buffer_size;
+		sample_buffer->Unlock();
+		sample_buffer->Release();
+		sample->Release();
+	}
+
+	audio->format = p_audio_format;
+	audio->samples = (int16_t *)buffer;
+	audio->samples_count = buffer_size / (p_audio_format.bytes_per_sample);
+	
+	
+
+	//result = P_TRUE;
+
+
+done:
+	if (source_reader) {
+		source_reader->Release();
+	}
+	if (media_type) {
+		media_type->Release();
+	}
+
+	return result;
+
 }
 
 P_EXTERN_END

@@ -26,10 +26,12 @@ float lerp(float x, float y, float t) {
 }
 
 
-void audio_callback(P_AudioRequest *request) {
-	int16_t *sample = request->sample;
-	while (sample < request->end_sample) {
-		float seconds = (float)sample_index / (float)request->samples_per_second;
+void tone_generator_audio_callback(P_AudioBuffer *buffer) {
+	int16_t *sample = buffer->samples;
+	int16_t *end_sample = sample + buffer->samples_count;
+	while (sample < end_sample) {
+		float seconds_per_sample = 1 / (float)buffer->format.samples_per_second;
+		float seconds = (float)sample_index  * seconds_per_sample;
 		*sample = (int16_t)((gain * amplitude * sin(frequency * seconds)) * INT16_MAX);
 		sample_index++;
 		sample++;
@@ -54,17 +56,37 @@ void audio_callback(P_AudioRequest *request) {
 	}
 }
 
+P_AudioBuffer music;
+uint32_t music_sample_index;
+
+
+void music_audio_callback(P_AudioBuffer *buffer) {
+	int16_t *sample = buffer->samples;
+	int16_t *end_sample = sample + buffer->samples_count;
+	float seconds_per_sample = 1 / (float)buffer->format.samples_per_second;
+	while (sample < end_sample) {
+		*sample = music.samples[music_sample_index];
+		sample++;
+		music_sample_index++;
+		if (music_sample_index == music.samples_count) {
+			music_sample_index = 0;
+		}
+	}
+}
+
 int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 	
 	P_Image image;
 	P_Bool load_image_result = p_load_image("c:\\dev\\i4t_play\\lena.png", &image);
+	P_Bool load_audio_result = p_load_audio("c:\\dev\\i4t_play\\Master.wav", &music);
 
 	sample_index = 0;
 	frequency = 500.0f;
 	amplitude = 0.1f;
 	wobble_amplitude = 50.0f;
 	wobble_frequency = 2.0f;
-	p.audio.callback = (P_AudioCallback)audio_callback; //play sound
+	//p.audio.callback = (P_AudioCallback)tone_generator_audio_callback; //play sound
+	p.audio.callback = (P_AudioCallback)music_audio_callback;
 	
 	p_initialize(&p);
 	
@@ -74,6 +96,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.pixels);
+	
+	
 	while (p_pull(&p)) {
 		if (p.mouse.left_button.pressed) {
 			debug_out("LMB pressed: %d; %d\n", p.mouse.position.x, p.mouse.position.y);
@@ -93,7 +117,6 @@ int CALLBACK WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		glViewport(0, 0, p.window.size.x, p.window.size.y);
 		glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
-		glBindTexture(GL_TEXTURE_2D, texture);
 		glBegin(GL_QUADS);
 		glTexCoord2f(0.0f, 0.0f);
 		glVertex2f(-1.0f, -1.0f);
